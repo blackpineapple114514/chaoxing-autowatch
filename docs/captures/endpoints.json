@@ -1,0 +1,34 @@
+{
+  "note": "学习通接口清单（实测）。<...> 为运行时取值。日期 2026-09-21。",
+  "auth": {
+    "entry": "https://i.chaoxing.com/base",
+    "login": "https://passport2.chaoxing.com/login?fid=<fid>&refer=<url>&space=2",
+    "school_fid": "10000",
+    "session": "cookie (登录后持久化 userdata/ 目录)"
+  },
+  "courses": {
+    "list": { "method": "POST", "url": "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/courselistdata" },
+    "job_summary": { "method": "GET", "url": "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/stu-job-info?clazzPersonStr=<clazzid>_<cpi>,..." },
+    "enter": { "method": "GET", "url": "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/stu?courseid=<courseid>&clazzid=<clazzid>&cpi=<cpi>&enc=<courseEnc>&t=<ts>&pageHeader=0&v=2&hideHead=0" }
+  },
+  "chapters": {
+    "tree": { "method": "GET", "url": "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse?courseid=<courseid>&clazzid=<clazzid>&cpi=<cpi>&ut=s&t=<ts>&stuenc=<courseEnc>" },
+    "tree_dom": { "selector": ".chapter_item", "attrs": ["id=cur<chapterId>", "title", "onclick=toOld('<courseId>','<chapterId>','<clazzId>',0)"] },
+    "study_page": { "method": "GET", "url": "https://mooc1.chaoxing.com/mycourse/studentstudy?chapterId=<chapterId>&courseId=<courseid>&clazzid=<clazzid>&cpi=<cpi>&enc=<studyEnc>&mooc2=1&hidetype=0&fanyaVersion=0&openc=<openc>", "warning": "hand-built URL -> 'enc校验失败'; must click toOld() so page computes enc/openc" }
+  },
+  "task_points": {
+    "cards_iframe": { "method": "GET", "url": "https://mooc1.chaoxing.com/mooc-ans/knowledge/cards?clazzid=<clazzid>&courseid=<courseid>&knowledgeid=<chapterId>&num=0&ut=s&cpi=<cpi>&v=2025-0424-1038-3&mooc2=1&isMicroCourse=false&editorPreview=0" },
+    "video_marker": "div.ans-job-icon.ans-job-video  (unfinished adds class: ans-job-icon-clear)",
+    "video_player_iframe": "https://mooc1.chaoxing.com/ananas/modules/video/index.html?v=<ver>",
+    "video_element": "video#video_html5_api"
+  },
+  "progress_report": {
+    "method": "GET",
+    "url": "https://mooc1.chaoxing.com/mooc-ans/multimedia/log/a/<userid>/<hash>",
+    "params": ["clazzId", "playingTime", "duration", "clipTime", "objectId", "otherInfo", "courseId", "jobid", "userid", "isdrag", "view", "enc", "rt", "videoFaceCaptureEnc", "dtype", "dtype=Video", "_t", "attDuration", "attDurationEnc", "courseEngineInfo"],
+    "success": "response JSON isPassed === true",
+    "sample_response": { "isPassed": false, "videoTimeLimit": false, "hasJobLimit": false },
+    "completion_rule": "watchingTime >= 90% of duration; before completion: no speed-up, no seek, no leaving/minimizing the page"
+  },
+  "homework": { "status": "NOT_CAPTURED_YET", "hint": "点击作业任务点后再抓" }
+}

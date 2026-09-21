@@ -1,0 +1,22 @@
+{
+  "captured_at": "2026-09-21T01:00+08:00",
+  "how": "在播放器 iframe 内 hook 全局函数 md5，播放视频触发一次进度上报，记录 md5 的输入/输出",
+  "md5_call": {
+    "input": "[153630595][123456789][1662169846944338][2b4b6ddfa1f17f4e330d828ea1f3b94e][44000][d_yHJ!$pdA~5][589000][0_589]",
+    "output": "5c759584a2cb851b2b51963de4a93c0f"
+  },
+  "salt": "d_yHJ!$pdA~5",
+  "formula": "enc = md5(\"[\" + clazzId + \"][\" + userid + \"][\" + jobid + \"][\" + objectId + \"][\" + playingTime*1000 + \"][\" + SALT + \"][\" + duration*1000 + \"][\" + clipTime + \"]\")",
+  "verified": [
+    { "playingTime_ms": 44000, "computed": "5c759584a2cb851b2b51963de4a93c0f", "expected": "5c759584a2cb851b2b51963de4a93c0f" },
+    { "playingTime_ms": 0, "computed": "3ffc3ac2ee310d17dc37d8c4de177c95", "expected": "3ffc3ac2ee310d17dc37d8c4de177c95 (observed enc in the live request)" }
+  ],
+  "verifier_script": "../tools/verify_enc.py",
+  "notes": [
+    "md5 是标准 MD5（已用 md5('abc') = 900150983cd24fb0d6963f7d28e17f72 验证）",
+    "playingTime 以【毫秒】参与（秒 * 1000）",
+    "duration 同样以毫秒参与",
+    "clipTime 以字符串 `start_end` 参与",
+    "attDurationEnc：本次未捕获到（推测在配置加载阶段计算，且在同一视频内为常量）。开工时再抓一次即可；按设计它对同一视频固定，可抓一次复用"
+  ]
+}

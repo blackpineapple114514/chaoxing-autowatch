@@ -1,0 +1,28 @@
+# 构建产物
+build/
+.gradle/
+.cxx/
+dist/
+__pycache__/
+*.py[cod]
+*.so
+*.apk
+*.exe
+
+# 本机环境（各人路径不同，不入库）
+local.properties
+.gradle/
+
+# 编辑器
+.idea/
+.vs/
+.vscode/
+*.iml
+
+# 日志
+*.log
+
+# 运行时数据（登录凭据等，绝不入库）
+cookies*.txt
+*.session
+creds*.json

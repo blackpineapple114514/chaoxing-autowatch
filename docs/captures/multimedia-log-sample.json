@@ -1,0 +1,41 @@
+{
+  "captured_at": "2026-09-21T00:42:47+08:00",
+  "site": "学习通 / 超星 (chaoxing)",
+  "account": { "name": "张小明", "userid": "123456789", "fid": "10000", "cpi": "580767375" },
+  "course": { "name": "大学生心理健康教育", "courseId": "226942553", "clazzId": "153630595" },
+  "chapter": { "name": "1.1 什么是心理健康", "chapterId": "586200478" },
+  "video": {
+    "objectId": "2b4b6ddfa1f17f4e330d828ea1f3b94e",
+    "jobid": "1662169846944338",
+    "duration": 589,
+    "cdn": "https://s2.cldisk.com/sv-w7/video/e4/3c/4f/2b4b6ddfa1f17f4e330d828ea1f3b94e/sd.mp4"
+  },
+  "endpoint": "GET https://mooc1.chaoxing.com/mooc-ans/multimedia/log/a/580767375/000d181f40bb48a2908a6326641d79ce",
+  "query": {
+    "clazzId": "153630595",
+    "playingTime": "0",
+    "duration": "589",
+    "clipTime": "0_589",
+    "objectId": "2b4b6ddfa1f17f4e330d828ea1f3b94e",
+    "otherInfo": "nodeId_586200478-cpi_580767375-rt_d-ds_0-ff_1-be_0_589-vt_1-v_6-enc_b9eec3e995729661dc5da6b4c2c915c7",
+    "courseId": "226942553",
+    "jobid": "1662169846944338",
+    "userid": "123456789",
+    "isdrag": "3",
+    "view": "pc",
+    "enc": "3ffc3ac2ee310d17dc37d8c4de177c95",
+    "rt": "0.9",
+    "videoFaceCaptureEnc": "",
+    "dtype": "Video",
+    "_t": "1789922567759",
+    "attDuration": "589",
+    "attDurationEnc": "94e9a6aa23d57341f7f40f16f2329733",
+    "courseEngineInfo": "false"
+  },
+  "response": { "status": 200, "body": "{\"isPassed\":false,\"videoTimeLimit\":false,\"hasJobLimit\":false}" },
+  "replay_test": {
+    "method": "fetch(url, {credentials:'include'}) from same-origin page",
+    "result": "200 + identical body",
+    "conclusion": "cookies alone are sufficient; no extra headers required for replay"
+  }
+}

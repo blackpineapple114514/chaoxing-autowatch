@@ -1,0 +1,70 @@
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'com.hpp.chaoxingwatch'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.hpp.chaoxingwatch"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+
+        // Chaquopy 要求显式指定 ABI。Python 3.12 只有 64 位：
+        //   arm64-v8a = 真机；x86_64 = 模拟器
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+        python {
+            // 必须与 app 的 Python 次版本一致（3.12）
+            buildPython("python")
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.debug   // 自用/同学安装：debug 签名即可
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 显式声明源码编码。实测 AGP 8.6 默认就传 -encoding UTF-8（已用 --no-build-cache
+    // 重编 + 字节比对验证），这里是防御性写法：一旦默认值变了，中文通知文案不会变乱码。
+    tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version "3.12"
+        pip {
+            install "flask"          // 纯 Python
+            install "requests"       // 纯 Python（含 urllib3/certifi/idna/charset-normalizer，均为 py3-none-any）
+            install "cryptography"   // 官方仓库有 android_24_arm64_v8a/x86_64 轮子
+        }
+    }
+}
+
+dependencies {
+    // 刻意不引 AndroidX / Play 服务：只用 framework API，构建面最小、最不容易炸。
+}

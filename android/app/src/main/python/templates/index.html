@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>学习通自动刷视频 v1.0</title>
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --elev:#1e222b; --bd:#2a303c; --tx:#e6e9ef;
+          --mut:#95a0b3; --ac:#4c8dff; --ok:#2fbf71; --warn:#e8b23a; --dg:#e0554d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--tx);
+         font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:920px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:20px; }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:18px; margin-bottom:16px; }
+  button { background:var(--ac); color:#fff; border:0; border-radius:8px; padding:9px 16px;
+           font-size:14px; cursor:pointer; font-family:inherit; }
+  button.ghost { background:transparent; border:1px solid var(--bd); color:var(--tx); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #qrbox { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  #qrbox img { width:220px; height:220px; background:#fff; border-radius:10px; padding:8px; }
+  .pill { display:inline-block; background:var(--elev); border:1px solid var(--bd); border-radius:999px;
+          padding:3px 10px; font-size:12px; color:var(--mut); margin-left:8px; }
+  .course { display:flex; align-items:flex-start; gap:12px; padding:12px; border:1px solid var(--bd);
+            border-radius:10px; margin-bottom:10px; background:var(--elev); }
+  .course .info { flex:1; min-width:0; }
+  .course .nm { font-weight:600; word-break:break-all; }
+  .course .meta { color:var(--mut); font-size:12px; }
+  .chlist { margin:8px 0 0; max-height:260px; overflow:auto; border-top:1px dashed var(--bd); padding-top:8px; }
+  .ch { display:flex; gap:8px; align-items:center; font-size:13px; padding:4px 0; }
+  .ch .j { color:var(--warn); font-size:12px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .grow { flex:1; }
+  input[type=checkbox] { width:16px; height:16px; accent-color:var(--ac); }
+  #log { font:12px/1.5 ui-monospace,Consolas,monospace; color:var(--mut); white-space:pre-wrap;
+         max-height:260px; overflow:auto; background:#0c0e12; border:1px solid var(--bd);
+         border-radius:8px; padding:10px; }
+  .stat b { color:var(--tx); }
+  .hide { display:none !important; }
+  .err { color:var(--dg); }
+  .ok { color:var(--ok); }
+  .tabs { display:flex; gap:8px; margin-bottom:16px; }
+  .tab { background:transparent; border:1px solid var(--bd); color:var(--mut); border-radius:8px;
+         padding:7px 14px; }
+  .tab.on { background:var(--ac); border-color:var(--ac); color:#fff; }
+  .inp { background:#0c0e12; border:1px solid var(--bd); border-radius:8px; color:var(--tx);
+         padding:9px 12px; font-size:14px; font-family:inherit; }
+  .inp:focus { outline:none; border-color:var(--ac); }
+  .tip { margin-top:12px; padding-top:10px; border-top:1px dashed var(--bd);
+         color:var(--warn); font-size:12.5px; }
+  /* 步骤条 */
+  .steps { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+  .step { flex:1; min-width:110px; text-align:center; padding:8px 6px; border-radius:8px;
+          background:var(--elev); border:1px solid var(--bd); color:var(--mut); font-size:13px; }
+  .step b { font-weight:700; }
+  .step.done { color:var(--ok); border-color:#245c3c; background:#14231a; }
+  .step.on { color:#fff; background:var(--ac); border-color:var(--ac);
+             box-shadow:0 0 0 3px rgba(76,141,255,.18); }
+  /* 进度条 */
+  .bar { height:10px; background:#0c0e12; border:1px solid var(--bd); border-radius:999px; overflow:hidden; }
+  .bar.big { height:14px; margin:10px 0; }
+  .bar i { display:block; height:100%; width:0; background:linear-gradient(90deg,var(--ac),#7db3ff);
+           border-radius:999px; transition:width .35s ease; }
+  .stagetxt { margin-top:10px; font-size:13.5px; color:var(--tx); }
+  .stagetxt.done { color:var(--ok); }
+  .stagetxt.err { color:var(--dg); }
+  .chapters-meta { color:var(--mut); font-size:12.5px; margin-bottom:8px; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>学习通自动刷视频 <span class="pill">v1.0</span></h1>
+  <div class="sub">扫码登录 → 读取课程 → 一键刷 / 自选刷。全程本机运行。 <span class="pill">by hpp</span></div>
+
+  <!-- 登录 -->
+  <div class="card" id="loginCard">
+    <div class="tabs">
+      <button class="tab on" data-mode="qr">扫码登录</button>
+      <button class="tab" data-mode="pwd">账号密码登录</button>
+    </div>
+
+    <!-- 模式一：扫码 -->
+    <div id="paneQr">
+      <div class="row" style="margin-bottom:12px">
+        <div class="grow" id="loginTip">请用<b>学习通 App</b>扫码登录</div>
+        <button class="ghost" id="saveQrBtn">保存二维码</button>
+        <button class="ghost" id="refreshBtn">刷新二维码</button>
+      </div>
+      <div id="qrbox">
+        <img id="qr" alt="二维码">
+        <div class="sub" id="qrstat">等待扫码…</div>
+        <div class="sub" id="qrttl"></div>
+      </div>
+      <div class="tip">扫码后如长时间无反应或提示失效，请改用上方 <b>账号密码登录</b>。</div>
+    </div>
+
+    <!-- 模式二：账号密码 -->
+    <div id="panePwd" class="hide">
+      <div class="row" style="margin-bottom:10px">
+        <input class="inp grow" id="unameInp" placeholder="学号 / 手机号" autocomplete="username">
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <input class="inp grow" id="pwdInp" type="password" placeholder="密码" autocomplete="current-password">
+      </div>
+      <div class="row">
+        <button id="pwdLoginBtn">登录</button>
+        <span class="grow sub" id="pwdMsg"></span>
+      </div>
+      <div class="tip">密码只在本机内存里过一手、不写入任何日志；登录后如需图形验证码或双因子，本模式暂不支持，请改用扫码。</div>
+    </div>
+  </div>
+
+  <!-- 主界面 -->
+  <div id="main" class="hide">
+    <div class="card">
+      <div class="bar"><i id="barFill"></i></div>
+      <div class="stagetxt" id="stageText">已登录，正在读取课程…</div>
+    </div>
+
+    <div class="card" id="acctCard">
+      <div class="row">
+        <div class="grow">已登录：<b id="uname"></b><span class="pill" id="uid"></span></div>
+        <button class="ghost" id="logoutBtn">退出登录</button>
+      </div>
+    </div>
+
+    <div class="card" id="pickCard">
+      <div class="row" style="margin-bottom:12px">
+        <button id="loadBtn">读取我的课程</button>
+        <span class="pill" id="courseCount">未读取</span>
+        <div class="grow"></div>
+        <button id="brushAllBtn" disabled>一键刷全部</button>
+        <button id="brushSelBtn" disabled>刷选中章节</button>
+      </div>
+      <label class="ch" id="selAllRow" style="margin-bottom:6px;font-size:14px">
+        <input type="checkbox" id="selAll" checked>
+        <b>全选（所有刷视频任务）</b>
+        <span class="pill" id="selInfo"></span>
+      </label>
+      <label class="ch" style="margin-bottom:8px;font-size:14px">
+        <input type="checkbox" id="skipDone" checked>
+        跳过已完成的任务点
+        <span class="pill" id="doneInfo"></span>
+      </label>
+      <div id="courses"></div>
+    </div>
+
+    <div class="card hide" id="androidCard">
+      <div class="row" style="margin-bottom:8px">
+        <b>手机后台保活</b>
+        <span class="pill" id="kaStat">检查中…</span>
+        <div class="grow"></div>
+        <button id="battBtn">加入电池优化白名单</button>
+        <button class="ghost" id="appSetBtn">应用详情 / 自启动</button>
+      </div>
+      <div class="sub" style="margin-bottom:0">
+        夜间连刷 6–7 小时，请照做：①「加入电池优化白名单」点一下并允许；②「应用详情」里把
+        <b>自启动 / 后台运行 / 省电策略</b>全部放开（小米=无限制；华为=手动管理全开；OPPO/vivo=允许后台运行并锁后台）；
+        ③在「最近任务」里给本应用加锁。开刷后会出现常驻通知「正在刷课」，<b>不要划掉它</b>——划掉等于停止刷课。
+      </div>
+    </div>
+
+    <div class="card" id="progCard">
+      <div class="row" style="margin-bottom:8px">
+        <div class="grow stat" id="jobstat">空闲</div>
+        <span class="pill" id="eta"></span>
+        <button class="ghost" id="cancelBtn" disabled>停止</button>
+      </div>
+      <div class="bar big"><i id="jobFill"></i></div>
+      <div class="chapters-meta" id="jobmeta"></div>
+      <div id="log">（等待任务）</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let courses = [];
+
+// ---------------- 平台桥（Android JS Bridge / 桌面 pywebview / 纯浏览器）
+// Android：window.AndroidBridge（Java @JavascriptInterface）；桌面：window.pywebview.api。
+// 两边都没有时全部静默降级，页面照常能用。
+const IS_ANDROID = !!(window.AndroidBridge && window.AndroidBridge.isAndroid);
+const Bridge = {
+  keepAlive(on) {
+    try { if (window.AndroidBridge && window.AndroidBridge.setKeepAlive) window.AndroidBridge.setKeepAlive(!!on); }
+    catch (e) { /* 静默 */ }
+  },
+  notifyDone(title, body) {
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.notifyDone) window.AndroidBridge.notifyDone(title, body);
+      else if (window.pywebview && window.pywebview.api && window.pywebview.api.notify_done)
+        window.pywebview.api.notify_done(title, body);
+    } catch (e) { /* 静默 */ }
+  },
+};
+
+function api(url, opt) { return fetch(url, opt).then(r => r.json()); }
+
+// ---------------- 登录
+// 学习通二维码只活 150 秒（官方页 3s×50 次就判失效），所以本地自己倒计时、到点主动换新码。
+let qrTtlMs = 150000;
+let qrDeadline = 0;
+let qrRotating = false;
+let scanState = 'idle';   // idle | scanned
+
+function setQr(dataUrl, ttlSec) {
+  if (ttlSec) qrTtlMs = ttlSec * 1000;
+  $('#qr').src = dataUrl;
+  qrDeadline = Date.now() + qrTtlMs;
+  scanState = 'idle';
+}
+
+function tickQr() {
+  if (!qrDeadline) { $('#qrttl').textContent = ''; return; }
+  if (scanState === 'scanned') { $('#qrttl').textContent = '已扫码，等待手机端确认…'; return; }
+  const left = Math.round((qrDeadline - Date.now()) / 1000);
+  if (left > 0) $('#qrttl').textContent = '本码剩余 ' + left + ' 秒（过期自动换新码）';
+  else { $('#qrttl').textContent = '正在换新码…'; rotateQr(); }
+}
+
+async function rotateQr(userAsked) {
+  if (qrRotating || loggedIn) return;
+  qrRotating = true;
+  try {
+    const j = await api('/api/login/refresh', { method: 'POST' });
+    if (j.ok) {
+      setQr(j.qr, j.ttl);
+      $('#qrstat').textContent = userAsked ? '已刷新，请重新扫码' : '二维码已换新，请扫码';
+    } else {
+      $('#qrstat').textContent = '刷新失败：' + (j.error || '未知错误');
+    }
+  } catch (e) {
+    $('#qrstat').textContent = '刷新失败：' + e.message;
+  } finally {
+    qrRotating = false;
+  }
+}
+
+async function newQR() {
+  const j = await api('/api/login/qr', { method: 'POST' });
+  if (!j.ok) { $('#qrstat').textContent = '二维码获取失败'; return; }
+  setQr(j.qr, j.ttl);
+  $('#qrstat').textContent = '等待扫码…';
+}
+$('#refreshBtn').onclick = () => rotateQr(true);
+
+// ---------------- 模式切换（扫码 / 账号密码）
+let loginMode = 'qr';
+function switchMode(m) {
+  loginMode = m;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+  $('#paneQr').classList.toggle('hide', m !== 'qr');
+  $('#panePwd').classList.toggle('hide', m !== 'pwd');
+  if (m === 'pwd') {
+    clearInterval(pollTimer); clearInterval(ttlTimer);   // 切到密码模式就别再轮二维码
+    $('#unameInp').focus();
+  } else if (!loggedIn) {
+    tickQr(); startPoll();
+  }
+}
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => switchMode(b.dataset.mode));
+
+// ---------------- 账号密码登录
+$('#pwdLoginBtn').onclick = doPwdLogin;
+$('#pwdInp').addEventListener('keydown', e => { if (e.key === 'Enter') doPwdLogin(); });
+async function doPwdLogin() {
+  const uname = $('#unameInp').value.trim();
+  const password = $('#pwdInp').value;
+  if (!uname || !password) { $('#pwdMsg').className = 'grow sub err'; $('#pwdMsg').textContent = '账号和密码都要填'; return; }
+  const btn = $('#pwdLoginBtn');
+  btn.disabled = true;
+  $('#pwdMsg').className = 'grow sub';
+  $('#pwdMsg').textContent = '登录中…（可能需要几秒）';
+  try {
+    const j = await api('/api/login/password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uname, password })
+    });
+    $('#pwdInp').value = '';                    // 立刻清掉，不留在内存/界面上
+    if (j.ok) {
+      $('#pwdMsg').className = 'grow sub ok';
+      $('#pwdMsg').textContent = '登录成功 ✅';
+      loggedIn = true;
+      clearInterval(pollTimer); clearInterval(ttlTimer);
+      await onLoggedIn();
+    } else if (j.status === 'need_vcode') {
+      $('#pwdMsg').className = 'grow sub err';
+      $('#pwdMsg').textContent = '需要图形验证码（本模式暂不支持），请改用扫码登录';
+    } else if (j.status === '2fa') {
+      $('#pwdMsg').className = 'grow sub err';
+      $('#pwdMsg').textContent = '账号开了双因子验证，请改用扫码登录';
+    } else {
+      $('#pwdMsg').className = 'grow sub err';
+      $('#pwdMsg').textContent = '登录失败：' + (j.error || '未知原因');
+    }
+  } catch (e) {
+    $('#pwdMsg').className = 'grow sub err';
+    $('#pwdMsg').textContent = '登录失败：' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('#saveQrBtn').onclick = () => {
+  const a = document.createElement('a');
+  a.href = $('#qr').src;
+  a.download = '学习通登录二维码.png';
+  document.body.appendChild(a); a.click(); a.remove();
+};
+
+let pollTimer = null, ttlTimer = null;
+let loggedIn = false;      // 登录成功后就锁死，后续任何状态都不再理会
+let pollBusy = false;      // 单次飞行：避免请求重叠导致状态乱序
+
+function startPoll() {
+  clearInterval(pollTimer);
+  clearInterval(ttlTimer);
+  ttlTimer = setInterval(tickQr, 1000);
+  pollTimer = setInterval(async () => {
+    if (loggedIn || pollBusy) return;
+    pollBusy = true;
+    let j;
+    try { j = await api('/api/login/status'); }
+    catch (e) { pollBusy = false; return; }
+    pollBusy = false;
+    if (loggedIn || !j.ok) return;      // 期间已经登录成功 → 丢弃这个旧结果
+    if (j.status === 'ok') {
+      loggedIn = true;
+      clearInterval(pollTimer); clearInterval(ttlTimer);
+      qrDeadline = 0; $('#qrttl').textContent = '';
+      $('#qrstat').textContent = '登录成功 ✅';
+      await onLoggedIn();
+    } else if (j.status === 'scanned') {
+      scanState = 'scanned';
+      qrDeadline = Date.now() + qrTtlMs;   // 已扫码就不再倒计时换码，等手机确认
+      $('#qrstat').textContent = '已扫码，请在手机上点「确认登录」';
+    } else if (j.status === 'cancelled') {
+      $('#qrstat').textContent = '手机上取消了，正在换新码…';
+      await rotateQr();
+    } else if (j.status === 'expired') {
+      if (scanState === 'scanned') {
+        $('#qrstat').textContent = '手机确认未完成（码已失效），可在手机上看下提示';
+      } else {
+        $('#qrstat').textContent = '二维码已失效，正在换新码…';
+      }
+      await rotateQr();
+    }
+  }, 2500);
+}
+
+async function onLoggedIn() {
+  loggedIn = true;
+  const me = await api('/api/me');
+  $('#uname').textContent = me.name || me.userid || '（未知）';
+  $('#uid').textContent = 'uid ' + (me.userid || '?');
+  $('#loginCard').classList.add('hide');
+  $('#main').classList.remove('hide');
+  setStep(1, 'done');
+  setStep(2, 'on');
+  $('#stageText').textContent = '登录成功，正在读取课程…';
+  loadCourses();
+}
+
+// ---------------- 步骤条 / 总进度
+function setStep(n, mode) {
+  document.querySelectorAll('#steps .step').forEach(el => {
+    const s = +el.dataset.s;
+    el.classList.remove('on', 'done');
+    if (mode === 'done' && s <= n) el.classList.add('done');
+    else if (s < n) el.classList.add('done');
+    else if (s === n) el.classList.add('on');
+  });
+}
+function setBar(p) { $('#barFill').style.width = Math.max(0, Math.min(100, p)) + '%'; }
+function setStage(txt, cls) {
+  const el = $('#stageText');
+  el.className = 'stagetxt' + (cls ? ' ' + cls : '');
+  el.textContent = txt;
+}
+
+// ---------------- 课程
+$('#loadBtn').onclick = loadCourses;
+async function loadCourses() {
+  $('#courseCount').textContent = '读取中…';
+  setStep(2, 'on'); setBar(10);
+  $('#stageText').textContent = '正在读取你的课程…';
+  const j = await api('/api/courses');
+  if (!j.ok) {
+    $('#courseCount').textContent = '读取失败: ' + (j.error || '');
+    setStage('读取课程失败：' + (j.error || ''), 'err');
+    return;
+  }
+  courses = j.courses || [];
+  $('#courseCount').textContent = courses.length + ' 门课程';
+  $('#brushAllBtn').disabled = courses.length === 0;
+  $('#brushSelBtn').disabled = courses.length === 0;
+  setStep(2, 'done'); setBar(20);
+  setStage('已读到 ' + courses.length + ' 门课程。展开章节可自选，或直接点「一键刷全部」。', 'done');
+  renderCourses();
+}
+
+function renderCourses() {
+  const box = $('#courses');
+  box.innerHTML = '';
+  courses.forEach((c, i) => {
+    const d = document.createElement('div');
+    d.className = 'course';
+    d.innerHTML = `
+      <input type="checkbox" data-i="${i}" checked>
+      <div class="info">
+        <div class="nm">${c.name || '(未命名)'}</div>
+        <div class="meta">courseid ${c.courseid} · clazzid ${c.clazzid}</div>
+        <div class="row" style="margin-top:6px">
+          <button class="ghost" data-exp="${i}">展开章节</button>
+        </div>
+        <div class="chlist hide" id="ch-${i}"></div>
+      </div>`;
+    box.appendChild(d);
+    const cb = d.querySelector('input[type=checkbox]');
+    cb.onchange = syncSelAll;
+  });
+  syncSelAll();
+  box.querySelectorAll('button[data-exp]').forEach(b => {
+    b.onclick = async () => {
+      const i = +b.dataset.exp, el = document.getElementById('ch-' + i);
+      if (!el.classList.contains('hide')) { el.classList.add('hide'); b.textContent = '展开章节'; return; }
+      el.classList.remove('hide'); b.textContent = '收起';
+      el.textContent = '加载中…';
+      const c = courses[i];
+      const j = await api(`/api/chapters?courseid=${c.courseid}&clazzid=${c.clazzid}&cpi=${c.cpi}`);
+      if (!j.ok) { el.textContent = '加载失败: ' + (j.error || ''); return; }
+      c.chapters = j.chapters;
+      el.innerHTML = '';
+      const allOn = $('#selAll').checked;
+      j.chapters.forEach((ch, k) => {
+        const nv = ch.videos;                                  // null=识别失败, 0=无视频, N=视频数
+        const nd = ch.videos_done;
+        const has = (nv === null || nv === undefined) ? true : nv > 0;
+        const vlabel = (nv === null || nv === undefined) ? '? 个视频'
+          : (nv + ' 个视频' + (nd ? '（已完成 ' + nd + '）' : ''));
+        const row = document.createElement('label');
+        row.className = 'ch';
+        row.innerHTML = `<input type="checkbox" class="chk" data-i="${i}" data-k="${k}"${has ? '' : ' disabled'}>
+          <span>${ch.name}</span>
+          <span class="j">${vlabel} / ${ch.jobcount} 任务点${has ? '' : '（无视频，跳过）'}</span>`;
+        el.appendChild(row);
+        row.querySelector('.chk').checked = has && allOn;
+      });
+      updateSelInfo();
+    };
+  });
+}
+
+// ---------------- 全选开关（默认开；只对“有视频任务”的项生效）
+function setAll(on) {
+  document.querySelectorAll('#courses > .course > input[type=checkbox]').forEach(b => b.checked = on);
+  document.querySelectorAll('.chlist .chk').forEach(b => { if (!b.disabled) b.checked = on; });
+  $('#selAll').indeterminate = false;
+  updateSelInfo();
+}
+function syncSelAll() {
+  const boxes = [...document.querySelectorAll('#courses > .course > input[type=checkbox]')];
+  const on = boxes.filter(b => b.checked).length;
+  const sa = $('#selAll');
+  sa.checked = boxes.length > 0 && on === boxes.length;
+  sa.indeterminate = on > 0 && on < boxes.length;
+  updateSelInfo();
+}
+function updateSelInfo() {
+  const sel = [...document.querySelectorAll('#courses > .course > input[type=checkbox]')].filter(b => b.checked).length;
+  let nv = 0, nd = 0, loaded = 0;
+  document.querySelectorAll('.chlist .chk').forEach(b => {
+    loaded++;
+    const c = courses[+b.dataset.i];
+    const ch = c && c.chapters ? c.chapters[+b.dataset.k] : null;
+    if (!ch) return;
+    if (typeof ch.videos === 'number') { nv += ch.videos; nd += (ch.videos_done || 0); }
+  });
+  $('#selInfo').textContent = '已选 ' + sel + ' 门课' + (loaded ? ' · 已展开章节共 ' + nv + ' 个视频' : '');
+  $('#doneInfo').textContent = loaded ? ('已展开章节：已完成 ' + nd + ' / ' + nv) : '';
+}
+$('#selAll').onchange = () => setAll($('#selAll').checked);
+
+// ---------------- 开刷后隐藏清单，直接看进度
+let picking = false;
+function enterProgress() {
+  $('#acctCard').classList.add('hide');
+  $('#pickCard').classList.add('hide');
+  picking = true;
+  Bridge.keepAlive(true);
+  setTimeout(() => { const el = $('#progCard'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60);
+}
+function exitProgress() {
+  if (!picking) return;
+  picking = false;
+  Bridge.keepAlive(false);
+  $('#acctCard').classList.remove('hide');
+  $('#pickCard').classList.remove('hide');
+}
+
+function selectedCourses() {
+  const picked = [];
+  document.querySelectorAll('#courses > .course > input[type=checkbox]').forEach(box => {
+    if (!box.checked) return;
+    const i = +box.dataset.i, c = courses[i];
+    const chEl = document.getElementById('ch-' + i);
+    let chapters = null;
+    if (chEl && c.chapters) {
+      const idx = [...chEl.querySelectorAll('.chk')].filter(x => x.checked).map(x => +x.dataset.k);
+      chapters = idx.map(k => c.chapters[k]);
+      if (chapters.length === 0) return;
+    }
+    picked.push({ courseid: c.courseid, clazzid: c.clazzid, cpi: c.cpi, name: c.name, chapters });
+  });
+  return picked;
+}
+
+let pendingBrush = null, pendingTimer = null;
+async function startBrush(mode) {
+  let tasks;
+  if (mode === 'all') {
+    tasks = courses.map(c => ({ courseid: c.courseid, clazzid: c.clazzid, cpi: c.cpi, name: c.name }));
+  } else {
+    tasks = selectedCourses();
+  }
+  if (!tasks.length) { setStage('没有选中任何课程/章节，先勾选再点。', 'err'); return; }
+
+  // 二次确认（不用原生 confirm，避免 WebView 弹窗兼容问题）：再点一次才真正开始
+  const btn = mode === 'all' ? $('#brushAllBtn') : $('#brushSelBtn');
+  if (pendingBrush !== mode) {
+    pendingBrush = mode;
+    btn.textContent = '再点一次确认';
+    setStage('将刷 ' + tasks.length + ' 门课程（会真实修改学习进度）。确认请再点一次「再点一次确认」。');
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => {
+      pendingBrush = null;
+      btn.textContent = mode === 'all' ? '一键刷全部' : '刷选中章节';
+      setStage('已取消（超时未确认）。');
+    }, 8000);
+    return;
+  }
+  clearTimeout(pendingTimer);
+  pendingBrush = null;
+  btn.textContent = mode === 'all' ? '一键刷全部' : '刷选中章节';
+
+  setStep(3, 'on'); setBar(3);
+  setStage('正在启动…');
+  const j = await api('/api/brush', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tasks, skip_done: $('#skipDone').checked }) });
+  if (!j.ok) { setStage('启动失败：' + (j.error || ''), 'err'); return; }
+  $('#cancelBtn').disabled = false;
+  enterProgress();
+  startJobPoll();
+}
+
+$('#brushAllBtn').onclick = () => startBrush('all');
+$('#brushSelBtn').onclick = () => startBrush('sel');
+$('#cancelBtn').onclick = async () => {
+  $('#cancelBtn').disabled = true;
+  setStage('正在停止…（当轮上报结束后立即生效）');
+  refreshJob();
+  await api('/api/brush/cancel', { method: 'POST' });
+  refreshJob();
+};
+
+let jobTimer = null;
+function startJobPoll() {
+  clearInterval(jobTimer);
+  jobTimer = setInterval(refreshJob, 1500);
+  refreshJob();
+}
+async function refreshJob() {
+  const j = await api('/api/brush/status');
+  const job = j.job;
+  if (!job) return;
+  const ph = job.phase || (job.state === 'done' ? 'done' : 'brushing');
+  const PH_NAME = { planning: '正在统计任务点', brushing: '刷课中', retrying: '重刷失败的',
+                    done: '已完成', cancelled: '已停止' };
+  $('#jobFill').style.width = Math.max(0, Math.min(100, job.percent || 0)) + '%';
+  $('#jobstat').innerHTML =
+    `<b>${PH_NAME[ph] || ph}</b>`
+    + ` · 进度 <b>${job.percent || 0}%</b>`
+    + ` · 视频 <b>${job.videos_done || 0}/${job.videos_total || 0}</b>`
+    + ` · 上报 <b>${job.reports || 0}</b> 次`
+    + (job.done_total ? ` · 已完成 <b>${job.done_total}</b>` : '')
+    + (job.quiz_total ? ` · 弹题 <b>${job.quiz_done || 0}/${job.quiz_total}</b>` : '')
+    + (job.skipped ? ` · 跳过 <b>${job.skipped}</b>` : '')
+    + (job.failed ? ` · <span class="err">失败 ${job.failed}</span>` : '');
+
+  // 预计完成时刻（挂机时看这个更直观）
+  $('#eta').textContent = (ph === 'planning' || ph === 'brushing' || ph === 'retrying') && job.eta_sec != null
+    ? ('预计 ' + fmtClock(job.eta_sec) + ' 完成 · 还需 ' + fmtEta(job.eta_sec)) : '';
+
+  if (ph === 'planning') {
+    setStep(3, 'on');
+    setStage(`正在统计任务点：课程 ${job.courses_index || 0}/${job.courses_total || 0}`
+             + (job.current_course ? `（${job.current_course}）` : '') + '…');
+  } else if (ph === 'brushing' || ph === 'retrying') {
+    setStep(3, 'done'); setStep(4, 'on');
+    if (ph === 'retrying') {
+      setStage(`重刷失败清单：第 ${job.retry_index || 0}/${job.retry_total || 0} 个视频…`);
+    } else {
+      setStage(`刷课中：第 ${job.videos_index || 0}/${job.videos_total || 0} 个视频`
+               + (job.cur_dur ? `（${fmt(job.cur_pos)} / ${fmt(job.cur_dur)}）` : '') + '…');
+    }
+  } else if (ph === 'done') {
+    setStep(5, 'done');
+    setStage('✅ ' + (job.last || '全部完成'), (job.errors && job.errors.length) ? '' : 'done');
+    $('#cancelBtn').disabled = true; clearInterval(jobTimer);
+    exitProgress();
+    if (!notified) {
+      notified = true;
+      notifyDone(job.failed ? '刷课结束（有失败）' : '刷课全部完成',
+                 (job.last || '') + '｜' + (job.videos_done || 0) + '/' + (job.videos_total || 0) + ' 个视频');
+    }
+  } else if (ph === 'cancelled') {
+    setStage('已停止：' + (job.last || ''));
+    $('#cancelBtn').disabled = true; clearInterval(jobTimer);
+    exitProgress();
+  }
+
+  // 明细
+  const meta = [];
+  if (job.current_course) meta.push('课程：' + job.current_course);
+  if (job.current_chapter) meta.push('章节：' + job.current_chapter);
+  if (job.current_video) meta.push('视频：' + job.current_video);
+  if (job.cur_dur && ph === 'brushing') {
+    meta.push('本视频：' + fmt(job.cur_pos) + ' / ' + fmt(job.cur_dur)
+              + '  （共 ' + job.videos_index + '/' + job.videos_total + ' 个）');
+  }
+  if (job.done_total) meta.push('已完成任务点：' + job.done_total + ' / ' + job.videos_total);
+  if (job.quiz_total) meta.push('弹题：答对 ' + (job.quiz_done || 0) + ' / ' + job.quiz_total);
+  if (job.failed) meta.push('失败待重刷：' + job.failed + ' 个');
+  if (job.last) meta.push('最新：' + job.last);
+  $('#jobmeta').textContent = meta.join('\n');
+
+  const lines = [];
+  if (job.errors && job.errors.length) lines.push('错误（最近 8 条）：\n' + job.errors.slice(-8).join('\n'));
+  const secs = job.started ? Math.round(Date.now() / 1000 - job.started) : 0;
+  if (secs) lines.push('已运行：' + fmt(secs));
+  $('#log').textContent = lines.join('\n') || '（一切正常）';
+}
+function fmt(s) {
+  s = Math.max(0, Math.round(s || 0));
+  const m = Math.floor(s / 60), r = s % 60;
+  return m + ':' + String(r).padStart(2, '0');
+}
+function fmtEta(s) {
+  s = Math.max(0, Math.round(s || 0));
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  if (h >= 24) return Math.floor(h / 24) + ' 天 ' + (h % 24) + ' 小时';
+  if (h > 0) return h + ' 小时' + (m ? ' ' + m + ' 分' : '');
+  if (m > 0) return m + ' 分';
+  return s + ' 秒';
+}
+function fmtClock(sec) {
+  const d = new Date(Date.now() + Math.max(0, sec || 0) * 1000);
+  const now = new Date();
+  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  const diff = Math.floor((d.setHours(0, 0, 0, 0) - now.setHours(0, 0, 0, 0)) / 86400000);
+  return hm + (diff === 1 ? '（次日）' : diff > 1 ? '（' + diff + ' 天后）' : '');
+}
+
+// 刷完提醒：提示音 + 系统通知（能弹就弹）+ 窗口拉回
+let notified = false;
+function notifyDone(title, body) {
+  document.title = '✅ ' + title;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = 880; g.gain.value = 0.14;
+    o.connect(g); g.connect(ctx.destination);
+    o.start();
+    setTimeout(() => { o.frequency.value = 1320; }, 200);
+    setTimeout(() => { o.stop(); ctx.close(); }, 520);
+  } catch (e) { /* 静默 */ }
+  try {
+    if (window.Notification) {
+      if (Notification.permission === 'granted') new Notification(title, { body });
+      else if (Notification.permission !== 'denied')
+        Notification.requestPermission().then(p => { if (p === 'granted') new Notification(title, { body }); });
+    }
+  } catch (e) { /* 静默 */ }
+  try { Bridge.notifyDone(title, body); } catch (e) { /* 静默 */ }
+}
+
+$('#logoutBtn').onclick = async () => {
+  await api('/api/logout', { method: 'POST' });
+  location.reload();
+};
+
+// ---------------- Android 保活卡（只在 Android 上出现）
+(function androidCardInit() {
+  if (!IS_ANDROID) return;
+  const card = $('#androidCard');
+  if (card) card.classList.remove('hide');
+  const stat = $('#kaStat');
+  function refresh() {
+    if (!stat) return;
+    try {
+      const ign = window.AndroidBridge.isIgnoringBatteryOptimizations();
+      stat.textContent = ign ? '已加入白名单 ✅' : '未加入白名单 ⚠️';
+      stat.style.color = ign ? 'var(--ok, #22c55e)' : 'var(--warn, #f59e0b)';
+    } catch (e) { stat.textContent = '未知'; }
+  }
+  $('#battBtn').onclick = () => {
+    try { window.AndroidBridge.requestIgnoreBatteryOptimizations(); } catch (e) { /* 静默 */ }
+    setTimeout(refresh, 800);
+  };
+  $('#appSetBtn').onclick = () => {
+    try { window.AndroidBridge.openAppSettings(); } catch (e) { /* 静默 */ }
+  };
+  refresh();
+})();
+
+// ---------------- 启动
+(async function init() {
+  const me = await api('/api/me');
+  if (me.ok && me.logged_in) { await onLoggedIn(); return; }
+  // 先试上次保存的登录（DPAPI 加密），失败再扫码
+  $('#qrstat').textContent = '正在尝试自动登录…';
+  try {
+    const a = await api('/api/login/auto', { method: 'POST' });
+    if (a.ok) {
+      loggedIn = true;
+      $('#qrstat').textContent = '已自动登录 ✅';
+      await onLoggedIn();
+      return;
+    }
+  } catch (e) { /* 忽略，走扫码 */ }
+  await newQR();
+  startPoll();
+})();
+</script>
+</body>
+</html>

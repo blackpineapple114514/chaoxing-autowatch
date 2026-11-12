@@ -152,6 +152,10 @@ def save_creds(u):
         alog("creds save failed: %s" % e)
 
 
+class _AuthExpired(Exception):
+    """已保存的登录确认失效（而不是网络抖一下就误判）。"""
+
+
 def has_creds():
     """是否存在可用的已保存凭据（不解密，只看有没有）。"""
     if IS_WINDOWS:
@@ -241,6 +245,7 @@ def finish_login(u):
 def api_login_auto():
     """用上次保存的凭据自动登录。失败（过期/换机器/换 Windows 用户）就悄悄返回 ok:false。"""
     if not has_creds():
+        alog("auto login skipped: no saved creds")
         return jsonify({"ok": False, "reason": "no_creds"})
     saved = load_creds()
     if not saved:
@@ -249,11 +254,18 @@ def api_login_auto():
         cx = Chaoxing.from_cookies(saved.get("cookies") or [])
         cs = cx.get_courses()
         if not cs:
-            raise RuntimeError("cookies 已失效")
-    except Exception as e:
-        alog("auto login failed: %s" % e)
-        drop_creds()          # 失效凭据立刻清掉，不留垃圾
+            raise _AuthExpired("cookies 已失效（课程列表为空）")
+    except _AuthExpired as e:
+        alog("auto login failed: creds invalid (%s)" % e)
+        drop_creds()          # 只有“确实失效”才清，别把好凭据误删
         return jsonify({"ok": False, "reason": "expired"})
+    except Exception as e:
+        # 网络抖动（连接被拒 / 超时 / WinError 10013）绝不能当成“登录失效”：
+        # 旧版在这里无条件 drop_creds()，一次断网就把唯一可复用的登录删掉，
+        # 之后每次开应用都只能扫码（用户看到的就是“扫码登录不了、刷新也没用”）。
+        msg = str(e)[:200]
+        alog("auto login network error (kept creds): %s" % msg)
+        return jsonify({"ok": False, "reason": "network", "error": msg})
     sid = _uuid.uuid4().hex
     session["sid"] = sid
     u = {"cx": cx, "userid": saved.get("userid"), "name": saved.get("name"),

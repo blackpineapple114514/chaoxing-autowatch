@@ -128,6 +128,7 @@
     <div class="card" id="pickCard">
       <div class="row" style="margin-bottom:12px">
         <button id="loadBtn">读取我的课程</button>
+        <button class="ghost" id="reloadBtn" title="重新拉课程与章节的任务点进度">刷新进度</button>
         <span class="pill" id="courseCount">未读取</span>
         <div class="grow"></div>
         <button id="brushAllBtn" disabled>一键刷全部</button>
@@ -422,24 +423,50 @@ function setStage(txt, cls) {
 }
 
 // ---------------- 课程
-$('#loadBtn').onclick = loadCourses;
-async function loadCourses() {
-  $('#courseCount').textContent = '读取中…';
-  setStep(2, 'on'); setBar(10);
-  $('#stageText').textContent = '正在读取你的课程…';
+$('#loadBtn').onclick = () => loadCourses();
+// 刷完 / 停掉之后进度会变，但列表是刷之前拉的 —— 必须能手动也不能忘了自动刷一次。
+$('#reloadBtn').onclick = () => reloadProgress(true);
+async function loadCourses(quiet) {
+  if (!quiet) {
+    $('#courseCount').textContent = '读取中…';
+    setStep(2, 'on'); setBar(10);
+    $('#stageText').textContent = '正在读取你的课程…';
+  }
   const j = await api('/api/courses');
   if (!j.ok) {
     $('#courseCount').textContent = '读取失败: ' + (j.error || '');
     setStage('读取课程失败：' + (j.error || ''), 'err');
-    return;
+    return false;
   }
   courses = j.courses || [];
   $('#courseCount').textContent = courses.length + ' 门课程';
   $('#brushAllBtn').disabled = courses.length === 0;
   $('#brushSelBtn').disabled = courses.length === 0;
-  setStep(2, 'done'); setBar(20);
-  setStage('已读到 ' + courses.length + ' 门课程。展开章节可自选，或直接点「一键刷全部」。', 'done');
+  if (!quiet) {
+    setStep(2, 'done'); setBar(20);
+    setStage('已读到 ' + courses.length + ' 门课程。展开章节可自选，或直接点「一键刷全部」。', 'done');
+  }
   renderCourses();
+  return true;
+}
+
+// 记住「展开了哪些课、勾了哪些章节」，刷新后原样恢复（否则一刷新勾选全丢）
+let expandedSet = new Set();
+let pickedSet = new Set();
+function snapshotPicks() {
+  pickedSet = new Set();
+  document.querySelectorAll('.chlist .chk').forEach(b => {
+    if (b.checked && !b.disabled) pickedSet.add(b.dataset.i + ':' + b.dataset.k);
+  });
+}
+async function reloadProgress(userAsked) {
+  snapshotPicks();
+  const ok = await loadCourses(true);
+  if (!ok) return;
+  for (const i of [...expandedSet]) await expandCourse(i);
+  pickedSet = new Set();       // 一次性快照，别影响后面手动展开的勾选
+  updateSelInfo();
+  if (userAsked) setStage('已刷新进度：' + courses.length + ' 门课程（展开的章节已重新读取任务点）。', 'done');
 }
 
 function renderCourses() {
@@ -466,8 +493,21 @@ function renderCourses() {
   box.querySelectorAll('button[data-exp]').forEach(b => {
     b.onclick = async () => {
       const i = +b.dataset.exp, el = document.getElementById('ch-' + i);
-      if (!el.classList.contains('hide')) { el.classList.add('hide'); b.textContent = '展开章节'; return; }
-      el.classList.remove('hide'); b.textContent = '收起';
+      if (!el.classList.contains('hide')) {
+        el.classList.add('hide'); b.textContent = '展开章节'; expandedSet.delete(i); return;
+      }
+      await expandCourse(i);
+    };
+  });
+}
+
+async function expandCourse(i) {
+      const el = document.getElementById('ch-' + i);
+      const btn = document.querySelector('button[data-exp="' + i + '"]');
+      if (!el) return;
+      el.classList.remove('hide');
+      if (btn) btn.textContent = '收起';
+      expandedSet.add(i);
       el.textContent = '加载中…';
       const c = courses[i];
       const j = await api(`/api/chapters?courseid=${c.courseid}&clazzid=${c.clazzid}&cpi=${c.cpi}`);
@@ -506,11 +546,10 @@ function renderCourses() {
           <span>${ch.name}</span>
           <span class="j">${vlabel} / ${ch.jobcount} 任务点${has ? '' : '（无视频，跳过）'}</span>`;
         el.appendChild(row);
-        row.querySelector('.chk').checked = has && allOn;
+        // 刷新后按「刷新前的勾选」恢复；没有快照时才跟随全选开关
+        row.querySelector('.chk').checked = has && (pickedSet.size ? pickedSet.has(i + ':' + k) : allOn);
       });
       updateSelInfo();
-    };
-  });
 }
 
 // ---------------- 全选开关（默认开；只对“有视频任务”的项生效）
@@ -641,6 +680,7 @@ async function startBrush(mode) {
                            parallel: Number($('#parallelSel').value || 0) }) });
   if (!j.ok) { setStage('启动失败：' + (j.error || ''), 'err'); return; }
   $('#cancelBtn').disabled = false;
+  notified = false; refreshedAfterRun = false;      // 新任务：通知和刷后自动刷新都重置
   enterProgress();
   startJobPoll();
 }
@@ -708,10 +748,19 @@ async function refreshJob() {
       notifyDone(job.failed ? '刷课结束（有失败）' : '刷课全部完成',
                  (job.last || '') + '｜' + (job.videos_done || 0) + '/' + (job.videos_total || 0) + ' 个视频');
     }
+    // 刷完自动重读一遍课程/章节进度：不重读的话，列表还停在开刷前的「未刷」状态
+    if (!refreshedAfterRun) {
+      refreshedAfterRun = true;
+      setTimeout(() => reloadProgress(false), 600);
+    }
   } else if (ph === 'cancelled') {
     setStage('已停止：' + (job.last || ''));
     $('#cancelBtn').disabled = true; clearInterval(jobTimer);
     exitProgress();
+    if (!refreshedAfterRun) {
+      refreshedAfterRun = true;
+      setTimeout(() => reloadProgress(false), 600);
+    }
   }
 
   // 明细
@@ -767,7 +816,7 @@ function fmtClock(sec) {
 }
 
 // 刷完提醒：提示音 + 系统通知（能弹就弹）+ 窗口拉回
-let notified = false;
+let notified = false, refreshedAfterRun = false;
 function notifyDone(title, body) {
   document.title = '✅ ' + title;
   try {

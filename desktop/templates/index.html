@@ -30,6 +30,15 @@
   .chlist { margin:8px 0 0; max-height:260px; overflow:auto; border-top:1px dashed var(--bd); padding-top:8px; }
   .ch { display:flex; gap:8px; align-items:center; font-size:13px; padding:4px 0; }
   .ch .j { color:var(--warn); font-size:12px; }
+  /* 已完成：打绿勾 + 变绿 + 勾选框禁用（不能选 = 不用选） */
+  .ok-mark { color:var(--ok); font-weight:700; flex:0 0 auto; }
+  .ch.done { background:#14231a; border-radius:6px; padding-left:6px; }
+  .ch.done .nmch { color:var(--ok); }
+  .ch.done .j { color:#4a7d5f; }
+  .ch.done input[type=checkbox] { opacity:.35; }
+  .course.done { border-color:#245c3c; background:#14231a; }
+  .course.done .nm { color:var(--ok); }
+  .course.done input[type=checkbox] { opacity:.35; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   .grow { flex:1; }
   input[type=checkbox] { width:16px; height:16px; accent-color:var(--ac); }
@@ -475,6 +484,7 @@ function renderCourses() {
   courses.forEach((c, i) => {
     const d = document.createElement('div');
     d.className = 'course';
+    d.id = 'co-' + i;
     d.innerHTML = `
       <input type="checkbox" data-i="${i}" checked>
       <div class="info">
@@ -533,34 +543,56 @@ async function expandCourse(i) {
       tipEl.className = 'chapters-meta';
       tipEl.textContent = tip;
       el.appendChild(tipEl);
+      // 课程级：全部视频已完成 → 打绿勾 + 禁用课程勾选框（明确表示"不用选"）
+      const coNode = document.getElementById('co-' + i);
+      if (coNode) {
+        const cb = coNode.querySelector('input[type=checkbox]');
+        const nm = coNode.querySelector('.nm');
+        const courseDone = vids > 0 && doneV >= vids;
+        coNode.classList.toggle('done', courseDone);
+        if (cb) { cb.disabled = courseDone; if (courseDone) cb.checked = false; }
+        if (nm) {
+          const old = nm.querySelector('.ok-mark');
+          if (old) old.remove();
+          if (courseDone) nm.insertAdjacentHTML('afterbegin', '<span class="ok-mark" title="该课程视频已全部完成">✓ </span>');
+        }
+      }
       const allOn = $('#selAll').checked;
       j.chapters.forEach((ch, k) => {
         const nv = ch.videos;                                  // null=识别失败, 0=无视频, N=视频数
         const nd = ch.videos_done;
         const has = (nv === null || nv === undefined) ? true : nv > 0;
+        // 该章节视频已全部完成 → 绿勾 + 不可选
+        const chDone = has && typeof nv === 'number' && nv > 0 && (nd || 0) >= nv;
+        const selectable = has && !chDone;
         const vlabel = (nv === null || nv === undefined) ? '? 个视频'
           : (nv + ' 个视频' + (nd ? '（已完成 ' + nd + '）' : ''));
         const row = document.createElement('label');
-        row.className = 'ch';
-        row.innerHTML = `<input type="checkbox" class="chk" data-i="${i}" data-k="${k}"${has ? '' : ' disabled'}>
-          <span>${ch.name}</span>
-          <span class="j">${vlabel} / ${ch.jobcount} 任务点${has ? '' : '（无视频，跳过）'}</span>`;
+        row.className = 'ch' + (chDone ? ' done' : '');
+        row.innerHTML = `<input type="checkbox" class="chk" data-i="${i}" data-k="${k}"${selectable ? '' : ' disabled'}>
+          ${chDone ? '<span class="ok-mark" title="该章节视频已完成">✓</span>' : ''}
+          <span class="nmch">${ch.name}</span>
+          <span class="j">${chDone ? '已完成 ' + nd + ' / ' + nv : vlabel + ' / ' + ch.jobcount + ' 任务点' + (has ? '' : '（无视频，跳过）')}</span>`;
         el.appendChild(row);
         // 刷新后按「刷新前的勾选」恢复；没有快照时才跟随全选开关
-        row.querySelector('.chk').checked = has && (pickedSet.size ? pickedSet.has(i + ':' + k) : allOn);
+        const box = row.querySelector('.chk');
+        box.checked = selectable && (pickedSet.size ? pickedSet.has(i + ':' + k) : allOn);
       });
       updateSelInfo();
 }
 
 // ---------------- 全选开关（默认开；只对“有视频任务”的项生效）
 function setAll(on) {
-  document.querySelectorAll('#courses > .course > input[type=checkbox]').forEach(b => b.checked = on);
+  // 已完成的课程/章节是 disabled 的，全选不得把它们重新勾上
+  document.querySelectorAll('#courses > .course > input[type=checkbox]').forEach(b => { if (!b.disabled) b.checked = on; });
   document.querySelectorAll('.chlist .chk').forEach(b => { if (!b.disabled) b.checked = on; });
   $('#selAll').indeterminate = false;
   updateSelInfo();
 }
 function syncSelAll() {
-  const boxes = [...document.querySelectorAll('#courses > .course > input[type=checkbox]')];
+  // 只统计"还能选"的课程，否则已完成课程会让全选框永远半选
+  const all = [...document.querySelectorAll('#courses > .course > input[type=checkbox]')];
+  const boxes = all.filter(b => !b.disabled);
   const on = boxes.filter(b => b.checked).length;
   const sa = $('#selAll');
   sa.checked = boxes.length > 0 && on === boxes.length;

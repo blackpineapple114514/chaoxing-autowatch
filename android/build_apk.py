@@ -15,7 +15,7 @@ PROJ = os.path.dirname(HERE)                       # projects/chaoxing-autowatch
 JAVA_HOME = r"C:\Users\hpp\android\jdk17"
 GRADLE = r"C:\Users\hpp\android\gradle-8.7\bin\gradle.bat"
 LOG = os.path.join(PROJ, "android", "build_android.log")
-NAME = "学习通自动刷视频v1.0.9.apk"
+NAME = "学习通自动刷视频v1.0.10.apk"
 
 VARIANT = (sys.argv[1] if len(sys.argv) > 1 else "release").lower()
 TASK = "assembleRelease" if VARIANT == "release" else "assembleDebug"

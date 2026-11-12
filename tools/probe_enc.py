@@ -13,7 +13,7 @@ froms = ['226942553_153630595_123456789_fe5966a5c14c8478375c1e3808dfdf77',
 print('md5(_from):', [md5(x) for x in froms])
 
 s = make_session()
-courseid, clazzid, cpi, kid = '226942553', '153630595', '580767375', '586200478'
+courseid, clazzid, cpi, kid = '226942553', '153630595', '000000000', '586200478'
 
 for label, url in [
     ('stucoursemiddle', f'https://mooc1.chaoxing.com/visit/stucoursemiddle?courseid={courseid}&clazzid={clazzid}&cpi={cpi}&ismooc2=1&v=2'),

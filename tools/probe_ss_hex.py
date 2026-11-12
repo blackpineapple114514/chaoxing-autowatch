@@ -5,7 +5,7 @@ from cx import make_session
 
 s = make_session()
 url = ('https://mooc1.chaoxing.com/mycourse/studentstudy?chapterId=586200478&courseId=226942553'
-       '&clazzid=153630595&cpi=580767375&enc=fe5966a5c14c8478375c1e3808dfdf77&mooc2=1&hidetype=0&fanyaVersion=0')
+       '&clazzid=153630595&cpi=000000000&enc=fe5966a5c14c8478375c1e3808dfdf77&mooc2=1&hidetype=0&fanyaVersion=0')
 t = s.get(url, timeout=25).text
 print('LEN', len(t))
 print('has 000d181f:', '000d181f40bb48a2908a6326641d79ce' in t)

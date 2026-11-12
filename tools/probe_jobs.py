@@ -5,7 +5,7 @@ sys.path.insert(0, r'<repo>\tools')
 from cx import make_session
 
 s = make_session()
-clazzid, courseid, cpi, kid = '153630595', '226942553', '580767375', '586200478'
+clazzid, courseid, cpi, kid = '153630595', '226942553', '000000000', '586200478'
 url = (f'https://mooc1.chaoxing.com/mooc-ans/knowledge/cards?clazzid={clazzid}&courseid={courseid}'
        f'&knowledgeid={kid}&num=0&ut=s&cpi={cpi}&v=2025-0424-1038-3&mooc2=1&isMicroCourse=false&editorPreview=0')
 r = s.get(url, timeout=25, headers={'Referer': f'https://mooc1.chaoxing.com/mycourse/studentstudy?chapterId={kid}&courseId={courseid}&clazzid={clazzid}&cpi={cpi}'})

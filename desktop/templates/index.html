@@ -432,6 +432,25 @@ function renderCourses() {
       if (!j.ok) { el.textContent = '加载失败: ' + (j.error || ''); return; }
       c.chapters = j.chapters;
       el.innerHTML = '';
+      // 课程级摘要：把「空课程 / 无视频 / 已全做完」三种情况说清楚，
+      // 否则一片空白或一片灰，人会以为程序卡住了。
+      const totalCh = j.chapters.length;
+      const vids = j.chapters.reduce((s, x) => s + (typeof x.videos === 'number' ? x.videos : 0), 0);
+      const doneV = j.chapters.reduce((s, x) => s + (x.videos_done || 0), 0);
+      let tip;
+      if (!totalCh) {
+        tip = '⚠ 该课程暂无章节内容（服务端返回 0 个任务点）—— 不是加载失败，通常是尚未开课 / 未加入 / 老师还没发布';
+      } else if (!vids) {
+        tip = '该课程没有视频任务点（只有作业 / 测验 / 文档），刷视频功能管不到它';
+      } else if (doneV >= vids) {
+        tip = '✅ 该课程视频已全部完成（' + doneV + ' / ' + vids + '），无需再刷';
+      } else {
+        tip = '共 ' + vids + ' 个视频 · 已完成 ' + doneV + ' · 待刷 ' + (vids - doneV);
+      }
+      const tipEl = document.createElement('div');
+      tipEl.className = 'chapters-meta';
+      tipEl.textContent = tip;
+      el.appendChild(tipEl);
       const allOn = $('#selAll').checked;
       j.chapters.forEach((ch, k) => {
         const nv = ch.videos;                                  // null=识别失败, 0=无视频, N=视频数
@@ -500,18 +519,31 @@ function exitProgress() {
 }
 
 function selectedCourses() {
+  // 规则：**任何一处打了勾都必须生效**，绝不静默丢弃。
+  //   ① 勾了章节  → 只刷这些章节（课程框勾不勾都一样有效）
+  //   ② 没勾章节但课程框勾着 → 整门课
+  //   ③ 都没勾 → 跳过这门课
+  // 旧实现只认「课程框 + 至少一个章节框」，勾了课程却没勾章节（或反过来）
+  // 都会被丢掉，界面就报「没有选中任何课程/章节」—— 已修。
   const picked = [];
-  document.querySelectorAll('#courses > .course > input[type=checkbox]').forEach(box => {
-    if (!box.checked) return;
-    const i = +box.dataset.i, c = courses[i];
+  document.querySelectorAll('#courses > .course').forEach(node => {
+    const box = node.querySelector('input[type=checkbox]');
+    const i = +(box && box.dataset.i);
+    const c = courses[i];
+    if (!c) return;
     const chEl = document.getElementById('ch-' + i);
-    let chapters = null;
-    if (chEl && c.chapters) {
-      const idx = [...chEl.querySelectorAll('.chk')].filter(x => x.checked).map(x => +x.dataset.k);
-      chapters = idx.map(k => c.chapters[k]);
-      if (chapters.length === 0) return;
+    const boxes = chEl ? [...chEl.querySelectorAll('.chk')] : [];
+    const on = boxes.filter(x => x.checked && !x.disabled);
+    if (on.length) {
+      const chapters = on.map(x => (c.chapters || [])[+x.dataset.k]).filter(Boolean);
+      if (chapters.length) {
+        picked.push({ courseid: c.courseid, clazzid: c.clazzid, cpi: c.cpi, name: c.name, chapters });
+        return;
+      }
     }
-    picked.push({ courseid: c.courseid, clazzid: c.clazzid, cpi: c.cpi, name: c.name, chapters });
+    if (box && box.checked) {
+      picked.push({ courseid: c.courseid, clazzid: c.clazzid, cpi: c.cpi, name: c.name, chapters: null });
+    }
   });
   return picked;
 }

@@ -4,7 +4,7 @@ sys.path.insert(0, r'<repo>\tools')
 from cx import make_session
 
 s = make_session()
-courseid, clazzid, cpi = '226942553', '153630595', '580767375'
+courseid, clazzid, cpi = '226942553', '153630595', '000000000'
 url = f'https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse?courseid={courseid}&clazzid={clazzid}&cpi={cpi}&ut=s&t={int(time.time()*1000)}'
 r = s.get(url, timeout=25, headers={'Referer': 'https://mooc2-ans.chaoxing.com/mooc2-ans/visit/interaction'})
 t = r.text

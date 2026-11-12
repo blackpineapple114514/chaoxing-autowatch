@@ -10,7 +10,7 @@ def enc_of(clazzid, userid, jobid, objectid, playing_ms, duration_ms, clip):
     return hashlib.md5(s.encode()).hexdigest()
 
 s = make_session()
-clazzid, courseid, cpi = '153630595', '226942553', '580767375'
+clazzid, courseid, cpi = '153630595', '226942553', '000000000'
 userid = '123456789'
 obj = '2b4b6ddfa1f17f4e330d828ea1f3b94e'
 jobid = '1662169846944338'

@@ -507,7 +507,9 @@ def _brush_worker(sid, tasks, opts):
                 done_idx.add(i)
         st["done_total"] = len(done_idx)
         st["skip_done"] = bool(skip_done)
-        durs = [int(a.get("ends") or 0) for (_t, _c, a, _d) in plan]
+        # 时长字段：这个接口里 ends 常为 0，真实时长在 attDuration（秒）。
+        # 只用 ends 会让 ETA 恒为 0（界面「预计 … 完成 · 还需 0 秒」）。
+        durs = [int(a.get("attDuration") or a.get("ends") or 0) for (_t, _c, a, _d) in plan]
         suf = [0] * (len(durs) + 1)
         for i in range(len(durs) - 1, -1, -1):
             suf[i] = suf[i + 1] + (0 if (skip_done and i in done_idx) else durs[i])
@@ -531,7 +533,7 @@ def _brush_worker(sid, tasks, opts):
                 st["errors"].append("dtoken 失败 %s: %s" % (name, e))
                 return False
             defaults["_dtoken"] = vs.get("dtoken")
-            duration = int(att.get("ends") or vs.get("duration") or 0)
+            duration = int(att.get("ends") or vs.get("duration") or att.get("attDuration") or 0)
             start_ms = int(att.get("headOffset") or att.get("playTime") or 0)
             st["cur_dur"] = duration
             st["cur_pos"] = max(0, start_ms // 1000)
@@ -682,11 +684,24 @@ def _brush_worker(sid, tasks, opts):
     st["phase"] = "done"
     st["state"] = "done"
     st["percent"] = 100
+    # 收尾文案要能自己解释「为什么一个都没刷」，否则用户会以为卡住了
     if not st.get("videos_total"):
-        st["last"] = "没有找到视频任务点（可能是作业/测验类，暂不支持）"
+        if not st.get("chapters_total"):
+            st["last"] = ("没有可刷的内容：这些课程服务端返回 0 个章节"
+                          "（多为尚未开课 / 未加入 / 老师还没发布）")
+        else:
+            st["last"] = ("没有可刷的视频任务点：已扫 %d 个章节，服务端未返回 video 类任务点"
+                          "（作业 / 测验 / 文档类暂不支持）" % st["chapters_total"])
     elif st.get("failed"):
         st["last"] = ("部分完成：成功 %d 个，仍有 %d 个没刷成（见错误列表），共上报 %d 次"
                       % (st["videos_done"], st["failed"], st["reports"]))
+    elif not st.get("videos_done"):
+        st["last"] = ("无需刷：选中的 %d 个视频任务点里 %d 个已完成（其余的用「跳过已完成」略过了），"
+                      "共上报 0 次" % (st["videos_total"], st.get("done_total") or 0))
+    elif st.get("skipped"):
+        # 全是「本来就做完、被跳过」时要说清楚，否则只看到「上报 0 次」会以为卡住
+        st["last"] = ("全部完成：%d 个视频，其中 %d 个本来就已完成（跳过未刷），共上报 %d 次"
+                      % (st["videos_done"], st["skipped"], st["reports"]))
     else:
         st["last"] = "全部完成：%d 个视频，共上报 %d 次" % (st["videos_done"], st["reports"])
 

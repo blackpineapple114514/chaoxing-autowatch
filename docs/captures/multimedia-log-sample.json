@@ -1,7 +1,7 @@
 {
   "captured_at": "2026-09-21T00:42:47+08:00",
   "site": "学习通 / 超星 (chaoxing)",
-  "account": { "name": "张小明", "userid": "123456789", "fid": "10000", "cpi": "580767375" },
+  "account": { "name": "张小明", "userid": "123456789", "fid": "10000", "cpi": "000000000" },
   "course": { "name": "大学生心理健康教育", "courseId": "226942553", "clazzId": "153630595" },
   "chapter": { "name": "1.1 什么是心理健康", "chapterId": "586200478" },
   "video": {
@@ -10,14 +10,14 @@
     "duration": 589,
     "cdn": "https://s2.cldisk.com/sv-w7/video/e4/3c/4f/2b4b6ddfa1f17f4e330d828ea1f3b94e/sd.mp4"
   },
-  "endpoint": "GET https://mooc1.chaoxing.com/mooc-ans/multimedia/log/a/580767375/000d181f40bb48a2908a6326641d79ce",
+  "endpoint": "GET https://mooc1.chaoxing.com/mooc-ans/multimedia/log/a/000000000/000d181f40bb48a2908a6326641d79ce",
   "query": {
     "clazzId": "153630595",
     "playingTime": "0",
     "duration": "589",
     "clipTime": "0_589",
     "objectId": "2b4b6ddfa1f17f4e330d828ea1f3b94e",
-    "otherInfo": "nodeId_586200478-cpi_580767375-rt_d-ds_0-ff_1-be_0_589-vt_1-v_6-enc_b9eec3e995729661dc5da6b4c2c915c7",
+    "otherInfo": "nodeId_586200478-cpi_000000000-rt_d-ds_0-ff_1-be_0_589-vt_1-v_6-enc_b9eec3e995729661dc5da6b4c2c915c7",
     "courseId": "226942553",
     "jobid": "1662169846944338",
     "userid": "123456789",

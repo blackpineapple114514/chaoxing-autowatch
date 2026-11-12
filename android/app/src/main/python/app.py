@@ -203,6 +203,8 @@ def drop_creds():
 USERS = {}          # sid -> {"cx": Chaoxing, "userid": str, "name": str}
 JOBS = {}           # sid -> brush job state
 LOCK = threading.Lock()
+# id(job_state) -> 该任务的 ETA 计算函数（不放进 st，st 要整体 jsonify）
+_ETA_FNS = {}
 
 
 def get_user():
@@ -684,6 +686,13 @@ def _brush_worker(sid, tasks, opts):
                         base = st.get("videos_done", 0) + st.get("failed", 0)
                         fs = sum(float(x.get("frac") or 0) for x in (st.get("workers") or []))
                         st["percent"] = int(min(100.0, ((base + fs) / float(_tot)) * 100))
+                    # 剩余时间：每上报一次就重算一遍，界面才会像倒计时一样走。
+                    # 算法见 _run_par._eta_makespan（按路数模拟排期，长短视频混排也不再低估）。
+                    _fn = _ETA_FNS.get(id(st))
+                    if _fn:
+                        _e = _fn()
+                        if _e is not None:
+                            st["eta_sec"] = _e
 
             # 收尾：回读服务端是否真的判定“已完成”
             _ok = True
@@ -757,15 +766,48 @@ def _brush_worker(sid, tasks, opts):
                 q.put(it)
             slots = [{"id": i + 1, "video": "", "pos": 0, "dur": 0, "frac": 0.0,
                       "state": "idle", "msg": "空闲"} for i in range(npar)]
-            remain = 0
+            # 队列里还没开工的视频时长（秒）。用于算「真正的最早完成时间」。
+            durs_left = []
             for (_t, _c, a, _d) in items:
                 if skip_done and a.get("isPassed"):
                     continue
-                remain += int(a.get("attDuration") or a.get("ends") or 0)
-            remain_box = [remain]
+                durs_left.append(int(a.get("attDuration") or a.get("ends") or 0))
+            lk_eta = threading.Lock()
+
+            def _eta_makespan():
+                """把「在跑的槽位剩余 + 队列中未开工的时长」当成排期问题算最早完成时间。
+
+                旧算法是 剩余总秒数 ÷ 路数，只在所有视频等长时才对；长短差很大时
+                （60 分钟的和 3 分钟混在一起）会把时间报得明显偏乐观。这里用
+                min-heap 模拟：每轮把最短的两个任务合并，直到只剩 npar 个，
+                取其中最大值 —— 就是这批任务在 npar 路上跑完的最短用时。
+                """
+                try:
+                    import heapq
+                    with lk_eta:
+                        heap = []
+                        for s in slots:
+                            left = int(s.get("dur") or 0) - int(s.get("pos") or 0)
+                            if s.get("state") == "running" and left > 0:
+                                heap.append(left)
+                        heap.extend([d for d in durs_left if d > 0])
+                    if not heap:
+                        return 0
+                    while len(heap) < npar:
+                        heap.append(0)
+                    heapq.heapify(heap)
+                    while len(heap) > npar:
+                        _a = heapq.heappop(heap)
+                        _b = heapq.heappop(heap)
+                        heapq.heappush(heap, _a + _b)
+                    return int(max(heap))
+                except Exception:
+                    return None
+
+            _ETA_FNS[id(st)] = _eta_makespan
             with st["lk"]:
                 st["workers"] = slots
-                st["eta_sec"] = int(remain / float(npar))
+                st["eta_sec"] = _eta_makespan() or 0
             lk2 = threading.Lock()
 
             def _one(slot):
@@ -776,6 +818,14 @@ def _brush_worker(sid, tasks, opts):
                     except Empty:
                         break
                     t, ch, att, defaults = item
+                    _dd = int(att.get("attDuration") or att.get("ends") or 0)
+                    if not (skip_done and att.get("isPassed")):
+                        # 已开工的任务不能再算进「队列剩余」，否则 ETA 少算一段
+                        with lk_eta:
+                            try:
+                                durs_left.remove(_dd)
+                            except ValueError:
+                                pass
                     slot["state"] = "running"
                     slot["msg"] = "开始"
                     slot["frac"] = 0.0
@@ -802,10 +852,9 @@ def _brush_worker(sid, tasks, opts):
                         else:
                             failed.append(item)
                         st["failed"] = len(failed)
-                        if not (skip_done and att.get("isPassed")):
-                            remain_box[0] = max(0, remain_box[0] - int(
-                                att.get("attDuration") or att.get("ends") or 0))
-                        st["eta_sec"] = int(remain_box[0] / float(npar))
+                        _e = _eta_makespan()
+                        if _e is not None:
+                            st["eta_sec"] = _e
                         st["percent"] = int(min(100.0, (st["videos_done"] + len(failed))
                                                * 100 / float(max(1, total))))
 
@@ -814,6 +863,7 @@ def _brush_worker(sid, tasks, opts):
                 th.start()
             for th in ths:
                 th.join()
+            _ETA_FNS.pop(id(st), None)
             if st["cancel"]:
                 raise KeyboardInterrupt     # 点了停止就别再往下走成「全部完成」
 

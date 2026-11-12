@@ -143,6 +143,16 @@
         跳过已完成的任务点
         <span class="pill" id="doneInfo"></span>
       </label>
+      <label class="ch" style="margin-bottom:8px;font-size:14px">
+        <span>并行路数</span>
+        <select id="parallelSel" style="margin:0 8px;padding:4px 8px;border-radius:6px">
+          <option value="1">1 路（最稳）</option>
+          <option value="2">2 路</option>
+          <option value="3">3 路（约 2 倍速）</option>
+          <option value="4">4 路</option>
+        </select>
+        <span class="pill" id="parallelInfo">同时刷多个视频，各按真实时间推进</span>
+      </label>
       <div id="courses"></div>
     </div>
 
@@ -579,7 +589,8 @@ async function startBrush(mode) {
   setStep(3, 'on'); setBar(3);
   setStage('正在启动…');
   const j = await api('/api/brush', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tasks, skip_done: $('#skipDone').checked }) });
+    body: JSON.stringify({ tasks, skip_done: $('#skipDone').checked,
+                           parallel: Number($('#parallelSel').value || 1) }) });
   if (!j.ok) { setStage('启动失败：' + (j.error || ''), 'err'); return; }
   $('#cancelBtn').disabled = false;
   enterProgress();
@@ -632,6 +643,9 @@ async function refreshJob() {
     setStep(3, 'done'); setStep(4, 'on');
     if (ph === 'retrying') {
       setStage(`重刷失败清单：第 ${job.retry_index || 0}/${job.retry_total || 0} 个视频…`);
+    } else if (job.parallel > 1) {
+      setStage(`刷课中：${job.videos_done || 0}/${job.videos_total || 0} 个已完成 · 并行 ${job.parallel} 路`
+               + (job.failed ? `（失败 ${job.failed}）` : '') + '…');
     } else {
       setStage(`刷课中：第 ${job.videos_index || 0}/${job.videos_total || 0} 个视频`
                + (job.cur_dur ? `（${fmt(job.cur_pos)} / ${fmt(job.cur_dur)}）` : '') + '…');
@@ -665,6 +679,16 @@ async function refreshJob() {
   if (job.quiz_total) meta.push('弹题：答对 ' + (job.quiz_done || 0) + ' / ' + job.quiz_total);
   if (job.failed) meta.push('失败待重刷：' + job.failed + ' 个');
   if (job.last) meta.push('最新：' + job.last);
+
+  // 并行：每一路一个槽位，能看出谁在跑、跑到哪
+  if (job.parallel > 1 && Array.isArray(job.workers) && job.workers.length) {
+    const ws = job.workers.map(w => {
+      const who = w.video ? (w.video.length > 22 ? w.video.slice(0, 22) + '…' : w.video) : (w.msg || '空闲');
+      const at = w.dur ? '(' + fmt(w.pos) + '/' + fmt(w.dur) + ')' : '';
+      return '  #' + w.id + ' ' + (w.state === 'running' ? '▶' : '·') + ' ' + who + at;
+    });
+    meta.push('并行 ' + job.parallel + ' 路：\n' + ws.join('\n'));
+  }
   $('#jobmeta').textContent = meta.join('\n');
 
   const lines = [];

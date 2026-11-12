@@ -11,8 +11,8 @@ android {
         applicationId "com.hpp.chaoxingwatch"
         minSdk 24
         targetSdk 34
-        versionCode 7
-        versionName "1.0.7"
+        versionCode 8
+        versionName "1.0.8"
 
         // Chaquopy 要求显式指定 ABI。Python 3.12 只有 64 位：
         //   arm64-v8a = 真机；x86_64 = 模拟器

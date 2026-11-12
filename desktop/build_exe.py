@@ -6,7 +6,7 @@ import PyInstaller.__main__ as pk
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "ChaoxingAutoWatch"
-CN = "学习通自动刷视频v1.0.7"
+CN = "学习通自动刷视频v1.0.8"
 VERSION_FILE = os.path.join(HERE, "version_info.txt")
 
 args = [

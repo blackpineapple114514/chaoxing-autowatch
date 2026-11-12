@@ -475,12 +475,17 @@ def _brush_worker(sid, tasks, opts):
     skip_done = bool(opts.get("skip_done", True))
     # 并行路数：服务端是按视频分别记账的（实测 3 路 80s 各 +60s），
     # 所以「同时开多个视频」能成倍提高总吞吐，而每个视频仍然是真实时间推进。
-    # 0 = 自动：按本次要刷的视频数决定路数（最多 4 路）。
+    # 0  = 自动：按本次待刷视频数决定路数，最多 4 路（4 是建议上限，不是协议限制）。
+    # -1 = 极限模式：勾到的视频全部同时刷（不封顶，风控风险自负，默认不选）。
+    # N>0 = 手选 N 路。
     try:
         parallel = int(opts.get("parallel", 0) or 0)
     except Exception:
         parallel = 0
-    parallel = max(0, min(4, parallel))
+    if parallel < 0:
+        parallel = -1
+    elif parallel > 16:
+        parallel = 16          # 手选档位的兜底，防止误传把线程数拉到离谱的量级
     # 服务端有“不得快于实时”的限速：上报间隔必须 ≥ 视频推进秒数，否则静默丢弃
     if delay < step:
         delay = float(step)
@@ -529,12 +534,18 @@ def _brush_worker(sid, tasks, opts):
                 done_idx.add(i)
         st["done_total"] = len(done_idx)
         st["skip_done"] = bool(skip_done)
-        # 并行路数定档：选「自动」就按待刷视频数走（最多 4 路）；
-        # 手选了 N 路但只有 M(<=N) 个待刷视频时自动降到 M 路 —— 多出来的线程
-        # 只会领取空队列立刻退出，还会把剩余时间算快，看着像 bug。
+        # 并行路数定档：
+        #   自动(0)   -> min(4, 待刷数)，4 只是建议上限
+        #   极限(-1)  -> 待刷数（全部同时开，不封顶）
+        #   手选 N    -> min(N, 待刷数)，避免空线程白转、剩余时间被算快
         pending_n = sum(1 for i, it in enumerate(plan)
                         if not (skip_done and it[2].get("isPassed")))
-        npar = min(4, max(1, pending_n)) if parallel == 0 else max(1, min(parallel, max(1, pending_n)))
+        if parallel == -1:
+            npar = max(1, pending_n)
+        elif parallel == 0:
+            npar = min(4, max(1, pending_n))
+        else:
+            npar = max(1, min(parallel, max(1, pending_n)))
         st["parallel"] = npar
         # 时长字段：这个接口里 ends 常为 0，真实时长在 attDuration（秒）。
         # 只用 ends 会让 ETA 恒为 0（界面「预计 … 完成 · 还需 0 秒」）。
@@ -868,8 +879,10 @@ def _brush_worker(sid, tasks, opts):
                 raise KeyboardInterrupt     # 点了停止就别再往下走成「全部完成」
 
         if npar > 1:
-            st["last"] = ("并行 %d 路开刷（待刷 %d 个视频；服务端按视频分别记账，单支仍是实时 1 倍速）"
-                          % (npar, pending_n))
+            _mode = "极限模式：" if parallel == -1 else ""
+            st["last"] = ("%s并行 %d 路开刷（待刷 %d 个视频；服务端按视频分别记账，"
+                          "单支仍是实时 1 倍速）" % (_mode, npar, pending_n))
+            st["last"] += "　⚠ 并发越高越容易被风控盯上" if parallel == -1 else ""
             _run_par(plan, npar)
         else:
             if parallel > 1 and pending_n <= 1:
@@ -883,7 +896,7 @@ def _brush_worker(sid, tasks, opts):
             if npar > 1:
                 batch = list(failed)
                 st["retry_total"] = len(batch)
-                _run_par(batch, min(4, max(1, min(npar, len(batch)))))
+                _run_par(batch, max(1, min(npar, len(batch))))
                 handled = set(id(x[2]) for x in batch)
                 failed = [f for f in failed if id(f[2]) not in handled]
                 st["failed"] = len(failed)
@@ -947,7 +960,7 @@ def api_brush():
         return jsonify({"ok": False, "error": "没有选择任何课程/章节"}), 400
     opts = {"step": int(body.get("step", 30) or 30), "delay": float(body.get("delay", 0) or 0),
             "skip_done": bool(body.get("skip_done", True)),
-            "parallel": int(body.get("parallel") or 0)}   # 缺省或 0 = 自动按视频数开
+            "parallel": int(body.get("parallel") or 0)}   # 0=自动 / -1=极限 / N=手选
     with LOCK:
         cur = JOBS.get(sid)
         if cur and cur.get("state") == "running":

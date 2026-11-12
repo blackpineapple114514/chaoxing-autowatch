@@ -146,13 +146,14 @@
       <label class="ch" style="margin-bottom:8px;font-size:14px">
         <span>并行路数</span>
         <select id="parallelSel" style="margin:0 8px;padding:4px 8px;border-radius:6px">
-          <option value="0" selected>自动（有几个视频开几路，最多 4 路）</option>
+          <option value="0" selected>自动（有几个视频开几路，建议最多 4 路）</option>
           <option value="1">1 路（最稳）</option>
           <option value="2">2 路</option>
           <option value="3">3 路（约 2 倍速）</option>
-          <option value="4">4 路</option>
+          <option value="4">4 路（建议上限）</option>
+          <option value="-1" style="color:#b42318">极限模式（选中几个视频就全开，不建议使用）</option>
         </select>
-        <span class="pill" id="parallelInfo">同时刷多个视频，各按真实时间推进</span>
+        <span class="pill" id="parallelInfo">4 路是<b>建议</b>上限：再高收益递减，被风控盯上的概率上升</span>
       </label>
       <div id="courses"></div>
     </div>
@@ -589,7 +590,7 @@ function selectedCourses() {
   return picked;
 }
 
-let pendingBrush = null, pendingTimer = null;
+let pendingBrush = null, pendingTimer = null, pendingExtreme = null;
 async function startBrush(mode) {
   let tasks;
   if (mode === 'all') {
@@ -608,6 +609,7 @@ async function startBrush(mode) {
     clearTimeout(pendingTimer);
     pendingTimer = setTimeout(() => {
       pendingBrush = null;
+      pendingExtreme = null;
       btn.textContent = mode === 'all' ? '一键刷全部' : '刷选中章节';
       setStage('已取消（超时未确认）。');
     }, 8000);
@@ -616,6 +618,21 @@ async function startBrush(mode) {
   clearTimeout(pendingTimer);
   pendingBrush = null;
   btn.textContent = mode === 'all' ? '一键刷全部' : '刷选中章节';
+
+  // 极限模式额外一道确认：非必要不建议用，勾到多少就全开，不封顶
+  if (Number($('#parallelSel').value) === -1 && pendingExtreme !== mode) {
+    pendingExtreme = mode;
+    btn.textContent = '确认用极限模式';
+    setStage('⚠ 极限模式会把勾到的视频全部同时开刷（不封顶），非必要不建议使用：并发越高越容易被风控盯上，也可能被判异常。确实要用，请再点一次「确认用极限模式」。', 'err');
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => {
+      pendingExtreme = null;
+      btn.textContent = mode === 'all' ? '一键刷全部' : '刷选中章节';
+      setStage('已取消（超时未确认）。');
+    }, 10000);
+    return;
+  }
+  pendingExtreme = null;
 
   setStep(3, 'on'); setBar(3);
   setStage('正在启动…');

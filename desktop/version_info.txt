@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(1, 0, 6, 0),
+    prodvers=(1, 0, 6, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,12 +17,12 @@ VSVersionInfo(
           '080404b0',
           [StringStruct('CompanyName', 'hpp'),
            StringStruct('FileDescription', '学习通自动刷视频'),
-           StringStruct('FileVersion', '1.0.0.0'),
+           StringStruct('FileVersion', '1.0.6.0'),
            StringStruct('InternalName', 'ChaoxingAutoWatch'),
            StringStruct('LegalCopyright', 'Copyright (C) 2026 hpp'),
-           StringStruct('OriginalFilename', '学习通自动刷视频v1.0.exe'),
+           StringStruct('OriginalFilename', '学习通自动刷视频v1.0.6.exe'),
            StringStruct('ProductName', '学习通自动刷视频'),
-           StringStruct('ProductVersion', '1.0'),
+           StringStruct('ProductVersion', '1.0.6'),
            StringStruct('Comments', 'by hpp')])
       ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

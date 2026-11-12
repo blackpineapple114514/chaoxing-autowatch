@@ -146,6 +146,7 @@
       <label class="ch" style="margin-bottom:8px;font-size:14px">
         <span>并行路数</span>
         <select id="parallelSel" style="margin:0 8px;padding:4px 8px;border-radius:6px">
+          <option value="0" selected>自动（有几个视频开几路，最多 4 路）</option>
           <option value="1">1 路（最稳）</option>
           <option value="2">2 路</option>
           <option value="3">3 路（约 2 倍速）</option>
@@ -620,7 +621,7 @@ async function startBrush(mode) {
   setStage('正在启动…');
   const j = await api('/api/brush', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tasks, skip_done: $('#skipDone').checked,
-                           parallel: Number($('#parallelSel').value || 1) }) });
+                           parallel: Number($('#parallelSel').value || 0) }) });
   if (!j.ok) { setStage('启动失败：' + (j.error || ''), 'err'); return; }
   $('#cancelBtn').disabled = false;
   enterProgress();

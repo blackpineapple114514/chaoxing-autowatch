@@ -473,11 +473,12 @@ def _brush_worker(sid, tasks, opts):
     skip_done = bool(opts.get("skip_done", True))
     # 并行路数：服务端是按视频分别记账的（实测 3 路 80s 各 +60s），
     # 所以「同时开多个视频」能成倍提高总吞吐，而每个视频仍然是真实时间推进。
+    # 0 = 自动：按本次要刷的视频数决定路数（最多 4 路）。
     try:
-        parallel = int(opts.get("parallel", 1) or 1)
+        parallel = int(opts.get("parallel", 0) or 0)
     except Exception:
-        parallel = 1
-    parallel = max(1, min(4, parallel))
+        parallel = 0
+    parallel = max(0, min(4, parallel))
     # 服务端有“不得快于实时”的限速：上报间隔必须 ≥ 视频推进秒数，否则静默丢弃
     if delay < step:
         delay = float(step)
@@ -526,6 +527,13 @@ def _brush_worker(sid, tasks, opts):
                 done_idx.add(i)
         st["done_total"] = len(done_idx)
         st["skip_done"] = bool(skip_done)
+        # 并行路数定档：选「自动」就按待刷视频数走（最多 4 路）；
+        # 手选了 N 路但只有 M(<=N) 个待刷视频时自动降到 M 路 —— 多出来的线程
+        # 只会领取空队列立刻退出，还会把剩余时间算快，看着像 bug。
+        pending_n = sum(1 for i, it in enumerate(plan)
+                        if not (skip_done and it[2].get("isPassed")))
+        npar = min(4, max(1, pending_n)) if parallel == 0 else max(1, min(parallel, max(1, pending_n)))
+        st["parallel"] = npar
         # 时长字段：这个接口里 ends 常为 0，真实时长在 attDuration（秒）。
         # 只用 ends 会让 ETA 恒为 0（界面「预计 … 完成 · 还需 0 秒」）。
         durs = [int(a.get("attDuration") or a.get("ends") or 0) for (_t, _c, a, _d) in plan]
@@ -709,7 +717,7 @@ def _brush_worker(sid, tasks, opts):
         total = len(plan)
         failed = []
         st["videos_total"] = total
-        st["parallel"] = parallel
+        st["parallel"] = npar
 
         def _run_seq(items, attempt_round=1):
             for idx, (t, ch, att, defaults) in enumerate(items, 1):
@@ -736,7 +744,7 @@ def _brush_worker(sid, tasks, opts):
             except Exception:
                 return cx
 
-        def _run_par(items):
+        def _run_par(items, npar):
             """多路并行：每个视频一支线程，各自按真实时间滴灌。
 
             服务端是按【视频】分别记账的（实测 3 路 80s 各 +60s），所以同时开
@@ -748,7 +756,7 @@ def _brush_worker(sid, tasks, opts):
             for it in items:
                 q.put(it)
             slots = [{"id": i + 1, "video": "", "pos": 0, "dur": 0, "frac": 0.0,
-                      "state": "idle", "msg": "空闲"} for i in range(parallel)]
+                      "state": "idle", "msg": "空闲"} for i in range(npar)]
             remain = 0
             for (_t, _c, a, _d) in items:
                 if skip_done and a.get("isPassed"):
@@ -757,7 +765,7 @@ def _brush_worker(sid, tasks, opts):
             remain_box = [remain]
             with st["lk"]:
                 st["workers"] = slots
-                st["eta_sec"] = int(remain / float(parallel))
+                st["eta_sec"] = int(remain / float(npar))
             lk2 = threading.Lock()
 
             def _one(slot):
@@ -797,7 +805,7 @@ def _brush_worker(sid, tasks, opts):
                         if not (skip_done and att.get("isPassed")):
                             remain_box[0] = max(0, remain_box[0] - int(
                                 att.get("attDuration") or att.get("ends") or 0))
-                        st["eta_sec"] = int(remain_box[0] / float(parallel))
+                        st["eta_sec"] = int(remain_box[0] / float(npar))
                         st["percent"] = int(min(100.0, (st["videos_done"] + len(failed))
                                                * 100 / float(max(1, total))))
 
@@ -809,20 +817,23 @@ def _brush_worker(sid, tasks, opts):
             if st["cancel"]:
                 raise KeyboardInterrupt     # 点了停止就别再往下走成「全部完成」
 
-        if parallel > 1:
-            st["last"] = "并行 %d 路开刷（服务端按视频分别记账，单支仍是实时 1 倍速）" % parallel
-            _run_par(plan)
+        if npar > 1:
+            st["last"] = ("并行 %d 路开刷（待刷 %d 个视频；服务端按视频分别记账，单支仍是实时 1 倍速）"
+                          % (npar, pending_n))
+            _run_par(plan, npar)
         else:
+            if parallel > 1 and pending_n <= 1:
+                st["last"] = "只有 %d 个待刷视频，自动用 1 路" % pending_n
             _run_seq(plan, 1)
 
         # ---------------- 阶段三：失败清单重刷一轮
         if failed and not st["cancel"]:
             st["phase"] = "retrying"
             st["last"] = "有 %d 个视频没刷成，正在重刷…" % len(failed)
-            if parallel > 1:
+            if npar > 1:
                 batch = list(failed)
                 st["retry_total"] = len(batch)
-                _run_par(batch)
+                _run_par(batch, min(4, max(1, min(npar, len(batch)))))
                 handled = set(id(x[2]) for x in batch)
                 failed = [f for f in failed if id(f[2]) not in handled]
                 st["failed"] = len(failed)
@@ -886,7 +897,7 @@ def api_brush():
         return jsonify({"ok": False, "error": "没有选择任何课程/章节"}), 400
     opts = {"step": int(body.get("step", 30) or 30), "delay": float(body.get("delay", 0) or 0),
             "skip_done": bool(body.get("skip_done", True)),
-            "parallel": int(body.get("parallel", 1) or 1)}
+            "parallel": int(body.get("parallel") or 0)}   # 缺省或 0 = 自动按视频数开
     with LOCK:
         cur = JOBS.get(sid)
         if cur and cur.get("state") == "running":

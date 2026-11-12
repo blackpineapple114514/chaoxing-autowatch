@@ -253,21 +253,21 @@ class Chaoxing:
         dtoken = defaults.get("_dtoken")
         clip = "0_%d" % duration
         e = enc_video(clazzid, userid, jobid, objectid, playing_sec * 1000, duration * 1000, clip)
-        # otherInfo 必须去掉服务端附加的 "&courseId=..." 尾巴：带上会被服务端丢弃（403 或静默忽略）。
-        otherinfo = (att.get("otherInfo") or "").split("&")[0]
+        # otherInfo 必须【原样】拼进 query（含服务端附加的 "&courseId=..." 尾巴）。
+        # 真实播放器就是这么发的，服务端按 & 截断取值，courseId 自然成为独立参数。
+        # 用 requests 的 params= 会把 & 编码成 %26 —— otherInfo 多出尾巴，服务端回 403。
+        otherinfo = att.get("otherInfo") or ""
         if video_face_capture_enc is None:
             video_face_capture_enc = att.get("videoFaceCaptureEnc", "") or ""
-        q = {
-            "clazzId": clazzid, "playingTime": str(playing_sec), "duration": str(duration),
-            "clipTime": clip, "objectId": objectid,
-            "otherInfo": otherinfo, "courseId": courseid, "jobid": jobid,
-            "userid": userid, "isdrag": str(isdrag), "view": "pc", "enc": e, "rt": "0.9",
-            "videoFaceCaptureEnc": video_face_capture_enc, "dtype": "Video",
-            "_t": str(int(time.time() * 1000)), "attDuration": str(duration),
-            "attDurationEnc": att.get("attDurationEnc", ""), "courseEngineInfo": "false",
-        }
-        url = "%s/%s" % (defaults.get("reportUrl"), dtoken)
-        r = self.s.get(url, params=q, timeout=25, headers={
+        url = ("%s/%s?clazzId=%s&playingTime=%d&duration=%d&clipTime=%s&objectId=%s"
+               "&otherInfo=%s&jobid=%s&userid=%s&isdrag=%s&view=pc&enc=%s&rt=0.9"
+               "&videoFaceCaptureEnc=%s&dtype=Video&_t=%d&attDuration=%d&attDurationEnc=%s"
+               "&courseEngineInfo=false") % (
+            defaults.get("reportUrl"), dtoken, clazzid, int(playing_sec), duration, clip, objectid,
+            otherinfo, jobid, userid, isdrag, e,
+            video_face_capture_enc, int(time.time() * 1000), duration,
+            att.get("attDurationEnc") or "")
+        r = self.s.get(url, timeout=25, headers={
             "Referer": "https://mooc1.chaoxing.com/mycourse/studentstudy?chapterId=%s&courseId=%s&clazzid=%s&cpi=%s"
                        % (defaults.get("knowledgeid"), courseid, clazzid, cpi),
             "X-Requested-With": "XMLHttpRequest"})

@@ -152,6 +152,10 @@ def save_creds(u):
         alog("creds save failed: %s" % e)
 
 
+class _AuthExpired(Exception):
+    """已保存的登录确认失效（而不是网络抖一下就误判）。"""
+
+
 def has_creds():
     """是否存在可用的已保存凭据（不解密，只看有没有）。"""
     if IS_WINDOWS:
@@ -241,6 +245,7 @@ def finish_login(u):
 def api_login_auto():
     """用上次保存的凭据自动登录。失败（过期/换机器/换 Windows 用户）就悄悄返回 ok:false。"""
     if not has_creds():
+        alog("auto login skipped: no saved creds")
         return jsonify({"ok": False, "reason": "no_creds"})
     saved = load_creds()
     if not saved:
@@ -249,11 +254,18 @@ def api_login_auto():
         cx = Chaoxing.from_cookies(saved.get("cookies") or [])
         cs = cx.get_courses()
         if not cs:
-            raise RuntimeError("cookies 已失效")
-    except Exception as e:
-        alog("auto login failed: %s" % e)
-        drop_creds()          # 失效凭据立刻清掉，不留垃圾
+            raise _AuthExpired("cookies 已失效（课程列表为空）")
+    except _AuthExpired as e:
+        alog("auto login failed: creds invalid (%s)" % e)
+        drop_creds()          # 只有“确实失效”才清，别把好凭据误删
         return jsonify({"ok": False, "reason": "expired"})
+    except Exception as e:
+        # 网络抖动（连接被拒 / 超时 / WinError 10013）绝不能当成“登录失效”：
+        # 旧版在这里无条件 drop_creds()，一次断网就把唯一可复用的登录删掉，
+        # 之后每次开应用都只能扫码（用户看到的就是“扫码登录不了、刷新也没用”）。
+        msg = str(e)[:200]
+        alog("auto login network error (kept creds): %s" % msg)
+        return jsonify({"ok": False, "reason": "network", "error": msg})
     sid = _uuid.uuid4().hex
     session["sid"] = sid
     u = {"cx": cx, "userid": saved.get("userid"), "name": saved.get("name"),
@@ -459,6 +471,14 @@ def _brush_worker(sid, tasks, opts):
     if step < 5:
         step = 30
     skip_done = bool(opts.get("skip_done", True))
+    # 并行路数：服务端是按视频分别记账的（实测 3 路 80s 各 +60s），
+    # 所以「同时开多个视频」能成倍提高总吞吐，而每个视频仍然是真实时间推进。
+    # 0 = 自动：按本次要刷的视频数决定路数（最多 4 路）。
+    try:
+        parallel = int(opts.get("parallel", 0) or 0)
+    except Exception:
+        parallel = 0
+    parallel = max(0, min(4, parallel))
     # 服务端有“不得快于实时”的限速：上报间隔必须 ≥ 视频推进秒数，否则静默丢弃
     if delay < step:
         delay = float(step)
@@ -507,7 +527,16 @@ def _brush_worker(sid, tasks, opts):
                 done_idx.add(i)
         st["done_total"] = len(done_idx)
         st["skip_done"] = bool(skip_done)
-        durs = [int(a.get("ends") or 0) for (_t, _c, a, _d) in plan]
+        # 并行路数定档：选「自动」就按待刷视频数走（最多 4 路）；
+        # 手选了 N 路但只有 M(<=N) 个待刷视频时自动降到 M 路 —— 多出来的线程
+        # 只会领取空队列立刻退出，还会把剩余时间算快，看着像 bug。
+        pending_n = sum(1 for i, it in enumerate(plan)
+                        if not (skip_done and it[2].get("isPassed")))
+        npar = min(4, max(1, pending_n)) if parallel == 0 else max(1, min(parallel, max(1, pending_n)))
+        st["parallel"] = npar
+        # 时长字段：这个接口里 ends 常为 0，真实时长在 attDuration（秒）。
+        # 只用 ends 会让 ETA 恒为 0（界面「预计 … 完成 · 还需 0 秒」）。
+        durs = [int(a.get("attDuration") or a.get("ends") or 0) for (_t, _c, a, _d) in plan]
         suf = [0] * (len(durs) + 1)
         for i in range(len(durs) - 1, -1, -1):
             suf[i] = suf[i + 1] + (0 if (skip_done and i in done_idx) else durs[i])
@@ -517,32 +546,60 @@ def _brush_worker(sid, tasks, opts):
             st["last"] = ("统计完毕：共 %d 个视频，其中 %d 个已完成"
                           % (len(plan), st["done_total"]))
 
-        def _brush_one(t, ch, att, defaults, prog=None, attempt_round=1):
+        def _show(slot, name=None, pos=None, dur=None, msg=None):
+            """进度展示：单路写全局字段，多路写各自槽位（互不覆盖）。"""
+            if slot is None:
+                if name is not None:
+                    st["current_video"] = name
+                if pos is not None:
+                    st["cur_pos"] = pos
+                if dur is not None:
+                    st["cur_dur"] = dur
+                if msg is not None:
+                    st["last"] = msg
+            else:
+                if name is not None:
+                    slot["video"] = name
+                if pos is not None:
+                    slot["pos"] = pos
+                if dur is not None:
+                    slot["dur"] = dur
+                if msg is not None:
+                    slot["msg"] = msg
+
+        def _bump(key, n=1):
+            with st["lk"]:
+                st[key] = st.get(key, 0) + n
+
+        def _brush_one(t, ch, att, defaults, prog=None, attempt_round=1, slot=None, cx=None):
             """刷一个视频。返回 True=成功，False=失败（交给重刷）。
 
             单次上报失败会**原地重试 3 次**（网络抖动不再直接丢掉这个视频）。
+            slot: 多路并行时本路的展示槽位（None=单路，直接写全局字段）。
+            cx:   本线程自己的客户端（requests.Session 不跨线程共用）。
             """
+            cx = cx or u["cx"]
+            defaults = dict(defaults)          # 每路各存各的 dtoken，别互相覆盖
             objectid = att.get("objectId")
             name = att.get("property", {}).get("name") or objectid
-            st["current_video"] = name
+            _show(slot, name)
             try:
                 vs = cx.get_video_status(objectid)
             except Exception as e:
                 st["errors"].append("dtoken 失败 %s: %s" % (name, e))
                 return False
             defaults["_dtoken"] = vs.get("dtoken")
-            duration = int(att.get("ends") or vs.get("duration") or 0)
+            duration = int(att.get("ends") or vs.get("duration") or att.get("attDuration") or 0)
             start_ms = int(att.get("headOffset") or att.get("playTime") or 0)
-            st["cur_dur"] = duration
-            st["cur_pos"] = max(0, start_ms // 1000)
+            _show(slot, None, max(0, start_ms // 1000), duration)
 
             # 跳过已完成（默认开）：服务端已判通过的视频不再浪费时间重刷
             if skip_done and att.get("isPassed"):
-                st["skipped"] += 1
-                st["last"] = "跳过已完成：%s" % name
+                _bump("skipped")
+                _show(slot, None, None, None, "跳过已完成：%s" % name)
                 return True
 
-            t_cur = st["cur_pos"]
+            t_cur = max(0, start_ms // 1000)   # 多路时不能读全局 cur_pos（会被别的路覆盖）
             idx = prog[0] if prog else 0
             total = prog[1] if prog else 0
 
@@ -569,14 +626,22 @@ def _brush_worker(sid, tasks, opts):
                     st["errors"].append("弹题提交异常 %s" % e)
                     return False
                 q["_done"] = bool(res.get("isRight"))
-                st["quiz_total"] = st.get("quiz_total", 0) + 1
+                _bump("quiz_total")
                 if q["_done"]:
-                    st["quiz_done"] = st.get("quiz_done", 0) + 1
+                    _bump("quiz_done")
                 return q["_done"]
 
+            # 服务端按【真实流逝时间】校验进度：必须先等够 delay 再涨 step。
+            # 原实现是「先 +step 再 sleep」，第一条就领先 30 秒，之后每一条都踩着这个
+            # 超前量被静默丢弃（仍回 200），整轮刷完一个都不进 —— 实测确认。
+            # 注意：这里**不能**给 delay 赋值 —— 那会让 delay 变成这个嵌套函数的
+            # 局部变量，后面读它就 UnboundLocalError（上一版就是这么把每个视频
+            # 都判成失败、界面显示「全部完成：0 个视频」的）。只准用别名。
+            wait_s = delay if delay >= step else float(step)
             while t_cur < duration:
                 if st["cancel"]:
                     raise KeyboardInterrupt
+                _sleep_cancelable(st, wait_s)
                 t_cur = min(duration, t_cur + step)
                 for q in quizzes:
                     if not q["_done"] and t_cur >= float(q.get("startTime") or 0):
@@ -599,8 +664,10 @@ def _brush_worker(sid, tasks, opts):
                     st["errors"].append("上报失败(重试3次) %s pt=%s: %s"
                                         % (name, t_cur, (res or {}).get("text", "")))
                     return False
-                st["reports"] += 1
-                st["cur_pos"] = t_cur
+                _bump("reports")
+                msg = "%s%s  %s / %s" % ("[重刷]" if attempt_round > 1 else "",
+                                         name, _mmss(t_cur), _mmss(duration))
+                _show(slot, None, t_cur, None, msg)
                 if prog:
                     _suf = st.get("suffix") or []
                     if 0 <= idx - 1 < len(_suf):
@@ -608,55 +675,184 @@ def _brush_worker(sid, tasks, opts):
                     if duration and total:
                         frac = min(1.0, t_cur / float(duration))
                         st["percent"] = int(((idx - 1 + frac) / float(total)) * 100)
-                st["last"] = "%s%s  %s / %s" % ("[重刷]" if attempt_round > 1 else "",
-                                                name, _mmss(t_cur), _mmss(duration))
-                _sleep_cancelable(st, delay)
+                elif duration:
+                    # 多路：进度 = 已完成数 + 各路小数进度之和（只看自己的槽位）
+                    if slot is not None:
+                        slot["frac"] = min(1.0, t_cur / float(duration))
+                    _tot = max(1, int(st.get("videos_total") or 1))
+                    with st["lk"]:
+                        base = st.get("videos_done", 0) + st.get("failed", 0)
+                        fs = sum(float(x.get("frac") or 0) for x in (st.get("workers") or []))
+                        st["percent"] = int(min(100.0, ((base + fs) / float(_tot)) * 100))
 
             # 收尾：回读服务端是否真的判定“已完成”
+            _ok = True
             try:
                 j2 = cx.get_jobs(t["courseid"], t["clazzid"], t["cpi"], ch["knowledgeid"])
                 for a2 in j2.get("attachments", []):
                     if a2.get("objectId") == objectid:
                         att["isPassed"] = a2.get("isPassed")
                         if a2.get("isPassed"):
-                            st["passed"] = st.get("passed", 0) + 1
+                            _bump("passed")
+                        else:
+                            # 验收：服务端进度必须真的涨过。没涨 = 上报被静默丢弃
+                            # （节拍快于真实时间 / 会话失效），不能当成功。
+                            _pt = int(a2.get("playTime") or a2.get("headOffset") or 0)
+                            if _pt <= start_ms:
+                                _ok = False
+                                if duration and start_ms >= duration * 1000:
+                                    # 进度条早就满了但服务端不判通过：跳转写进去的记录不算数，
+                                    # 只能重新完整看一遍。别当成功，算进失败清单让人看见。
+                                    st["errors"].append(
+                                        "进度已满但未判通过 %s（跳转记录不算，需重新完整观看）" % name)
+                                else:
+                                    st["errors"].append(
+                                        "服务端未记录进度 %s（进度 %ss 未增长，多为节拍过快或会话失效）"
+                                        % (name, _pt // 1000))
             except Exception:
                 pass
-            return True
+            return _ok
 
         # ---------------- 阶段二：逐个上报
         total = len(plan)
         failed = []
-        for idx, (t, ch, att, defaults) in enumerate(plan, 1):
+        st["videos_total"] = total
+        st["parallel"] = npar
+
+        def _run_seq(items, attempt_round=1):
+            for idx, (t, ch, att, defaults) in enumerate(items, 1):
+                if st["cancel"]:
+                    raise KeyboardInterrupt
+                st["current_course"] = t.get("name") or t["courseid"]
+                st["current_chapter"] = ch.get("name") or ch["knowledgeid"]
+                st["videos_index"] = idx
+                if _brush_one(t, ch, att, defaults, prog=(idx, total), attempt_round=attempt_round):
+                    st["videos_done"] += 1
+                else:
+                    failed.append((t, ch, att, defaults))
+                st["failed"] = len(failed)
+                st["percent"] = int((idx / float(max(1, total))) * 100)
+
+        def _clone_cx():
+            """新开一个 Session 复用同一份 cookie：requests.Session 不跨线程共用。"""
+            try:
+                import requests as _rq
+                s2 = _rq.Session()
+                s2.cookies.update(cx.s.cookies)
+                s2.headers.update({k: v for k, v in cx.s.headers.items()})
+                return Chaoxing(session=s2)
+            except Exception:
+                return cx
+
+        def _run_par(items, npar):
+            """多路并行：每个视频一支线程，各自按真实时间滴灌。
+
+            服务端是按【视频】分别记账的（实测 3 路 80s 各 +60s），所以同时开
+            多个视频能成倍提高总吞吐；单个视频的推进节奏仍然是实时 1 倍速，
+            不会像“倍速/拖拽”那样被服务端静默丢弃。
+            """
+            from queue import Queue, Empty
+            q = Queue()
+            for it in items:
+                q.put(it)
+            slots = [{"id": i + 1, "video": "", "pos": 0, "dur": 0, "frac": 0.0,
+                      "state": "idle", "msg": "空闲"} for i in range(npar)]
+            remain = 0
+            for (_t, _c, a, _d) in items:
+                if skip_done and a.get("isPassed"):
+                    continue
+                remain += int(a.get("attDuration") or a.get("ends") or 0)
+            remain_box = [remain]
+            with st["lk"]:
+                st["workers"] = slots
+                st["eta_sec"] = int(remain / float(npar))
+            lk2 = threading.Lock()
+
+            def _one(slot):
+                local = _clone_cx()
+                while not st["cancel"]:
+                    try:
+                        item = q.get_nowait()
+                    except Empty:
+                        break
+                    t, ch, att, defaults = item
+                    slot["state"] = "running"
+                    slot["msg"] = "开始"
+                    slot["frac"] = 0.0
+                    ok = False
+                    try:
+                        ok = _brush_one(t, ch, att, defaults, prog=None,
+                                        attempt_round=1, slot=slot, cx=local)
+                    except KeyboardInterrupt:
+                        slot["state"] = "idle"
+                        slot["msg"] = "已停止"
+                        return
+                    except Exception as e:
+                        st["errors"].append("并行任务异常 %s: %s" % (
+                            att.get("property", {}).get("name") or att.get("objectId"), e))
+                    slot["state"] = "idle"
+                    slot["msg"] = "完成" if ok else "失败"
+                    slot["video"] = ""
+                    slot["pos"] = 0
+                    slot["dur"] = 0
+                    slot["frac"] = 0.0
+                    with lk2:
+                        if ok:
+                            st["videos_done"] += 1
+                        else:
+                            failed.append(item)
+                        st["failed"] = len(failed)
+                        if not (skip_done and att.get("isPassed")):
+                            remain_box[0] = max(0, remain_box[0] - int(
+                                att.get("attDuration") or att.get("ends") or 0))
+                        st["eta_sec"] = int(remain_box[0] / float(npar))
+                        st["percent"] = int(min(100.0, (st["videos_done"] + len(failed))
+                                               * 100 / float(max(1, total))))
+
+            ths = [threading.Thread(target=_one, args=(s,), daemon=True) for s in slots]
+            for th in ths:
+                th.start()
+            for th in ths:
+                th.join()
             if st["cancel"]:
-                raise KeyboardInterrupt
-            st["current_course"] = t.get("name") or t["courseid"]
-            st["current_chapter"] = ch.get("name") or ch["knowledgeid"]
-            st["videos_index"] = idx
-            st["videos_total"] = total
-            if _brush_one(t, ch, att, defaults, prog=(idx, total), attempt_round=1):
-                st["videos_done"] += 1
-            else:
-                failed.append((t, ch, att, defaults))
-            st["failed"] = len(failed)
-            st["percent"] = int((idx / float(max(1, total))) * 100)
+                raise KeyboardInterrupt     # 点了停止就别再往下走成「全部完成」
+
+        if npar > 1:
+            st["last"] = ("并行 %d 路开刷（待刷 %d 个视频；服务端按视频分别记账，单支仍是实时 1 倍速）"
+                          % (npar, pending_n))
+            _run_par(plan, npar)
+        else:
+            if parallel > 1 and pending_n <= 1:
+                st["last"] = "只有 %d 个待刷视频，自动用 1 路" % pending_n
+            _run_seq(plan, 1)
 
         # ---------------- 阶段三：失败清单重刷一轮
         if failed and not st["cancel"]:
             st["phase"] = "retrying"
             st["last"] = "有 %d 个视频没刷成，正在重刷…" % len(failed)
-            for ri, (t, ch, att, defaults) in enumerate(list(failed), 1):
-                if st["cancel"]:
-                    raise KeyboardInterrupt
-                st["current_course"] = t.get("name") or t["courseid"]
-                st["current_chapter"] = ch.get("name") or ch["knowledgeid"]
-                st["retry_index"] = ri
-                st["retry_total"] = len(failed)
-                if _brush_one(t, ch, att, defaults, prog=None, attempt_round=2):
-                    st["videos_done"] += 1
-                    if (t, ch, att, defaults) in failed:
-                        failed.remove((t, ch, att, defaults))
+            if npar > 1:
+                batch = list(failed)
+                st["retry_total"] = len(batch)
+                _run_par(batch, min(4, max(1, min(npar, len(batch)))))
+                handled = set(id(x[2]) for x in batch)
+                failed = [f for f in failed if id(f[2]) not in handled]
                 st["failed"] = len(failed)
+                if not failed:
+                    st["last"] = "重刷完成"
+                st["retry_index"] = st["retry_total"]
+            else:
+                for ri, (t, ch, att, defaults) in enumerate(list(failed), 1):
+                    if st["cancel"]:
+                        raise KeyboardInterrupt
+                    st["current_course"] = t.get("name") or t["courseid"]
+                    st["current_chapter"] = ch.get("name") or ch["knowledgeid"]
+                    st["retry_index"] = ri
+                    st["retry_total"] = len(failed)
+                    if _brush_one(t, ch, att, defaults, prog=None, attempt_round=2):
+                        st["videos_done"] += 1
+                        if (t, ch, att, defaults) in failed:
+                            failed.remove((t, ch, att, defaults))
+                    st["failed"] = len(failed)
     except KeyboardInterrupt:
         st["phase"] = "cancelled"
         st["state"] = "cancelled"
@@ -667,11 +863,24 @@ def _brush_worker(sid, tasks, opts):
     st["phase"] = "done"
     st["state"] = "done"
     st["percent"] = 100
+    # 收尾文案要能自己解释「为什么一个都没刷」，否则用户会以为卡住了
     if not st.get("videos_total"):
-        st["last"] = "没有找到视频任务点（可能是作业/测验类，暂不支持）"
+        if not st.get("chapters_total"):
+            st["last"] = ("没有可刷的内容：这些课程服务端返回 0 个章节"
+                          "（多为尚未开课 / 未加入 / 老师还没发布）")
+        else:
+            st["last"] = ("没有可刷的视频任务点：已扫 %d 个章节，服务端未返回 video 类任务点"
+                          "（作业 / 测验 / 文档类暂不支持）" % st["chapters_total"])
     elif st.get("failed"):
         st["last"] = ("部分完成：成功 %d 个，仍有 %d 个没刷成（见错误列表），共上报 %d 次"
                       % (st["videos_done"], st["failed"], st["reports"]))
+    elif not st.get("videos_done"):
+        st["last"] = ("无需刷：选中的 %d 个视频任务点里 %d 个已完成（其余的用「跳过已完成」略过了），"
+                      "共上报 0 次" % (st["videos_total"], st.get("done_total") or 0))
+    elif st.get("skipped"):
+        # 全是「本来就做完、被跳过」时要说清楚，否则只看到「上报 0 次」会以为卡住
+        st["last"] = ("全部完成：%d 个视频，其中 %d 个本来就已完成（跳过未刷），共上报 %d 次"
+                      % (st["videos_done"], st["skipped"], st["reports"]))
     else:
         st["last"] = "全部完成：%d 个视频，共上报 %d 次" % (st["videos_done"], st["reports"])
 
@@ -687,7 +896,8 @@ def api_brush():
     if not tasks:
         return jsonify({"ok": False, "error": "没有选择任何课程/章节"}), 400
     opts = {"step": int(body.get("step", 30) or 30), "delay": float(body.get("delay", 0) or 0),
-            "skip_done": bool(body.get("skip_done", True))}
+            "skip_done": bool(body.get("skip_done", True)),
+            "parallel": int(body.get("parallel") or 0)}   # 缺省或 0 = 自动按视频数开
     with LOCK:
         cur = JOBS.get(sid)
         if cur and cur.get("state") == "running":
@@ -703,6 +913,7 @@ def api_brush():
                      "eta_sec": None, "suffix": [], "skip_done": True, "done_total": 0,
                      "failed": 0, "retry_index": 0, "retry_total": 0,
                      "current_course": "", "current_chapter": "", "current_video": "",
+                     "parallel": 1, "workers": [], "lk": threading.Lock(),
                      "last": "", "started": time.time()}
     threading.Thread(target=_brush_worker, args=(sid, tasks, opts), daemon=True).start()
     return jsonify({"ok": True})
@@ -713,7 +924,7 @@ def api_brush_status():
     j = get_job()
     if not j:
         return jsonify({"ok": True, "job": None})
-    return jsonify({"ok": True, "job": {k: v for k, v in j.items() if k != "cancel"}})
+    return jsonify({"ok": True, "job": {k: v for k, v in j.items() if k not in ("cancel", "lk")}})
 
 
 @app.route("/api/brush/cancel", methods=["POST", "GET"])
@@ -738,7 +949,7 @@ def api_brush_status_all():
     j = next(iter(JOBS.values()), None)
     if not j:
         return jsonify({"ok": True, "job": None})
-    return jsonify({"ok": True, "job": {k: v for k, v in j.items() if k != "cancel"}})
+    return jsonify({"ok": True, "job": {k: v for k, v in j.items() if k not in ("cancel", "lk")}})
 
 
 @app.post("/api/logout")
@@ -775,34 +986,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8760"))
     print("学习通自动刷视频 v1.0 (by hpp) -> http://127.0.0.1:%d" % port)
     serve(port=port)
-
-
-# ==================== TEST ONLY：USB 反向上网（非交付代码） ====================
-# 用途：平板没连 Wi-Fi 时，用 `adb reverse tcp:8080 tcp:8080` 把平板的 127.0.0.1:8080
-#       映射到本机的 HTTP 代理，从而经 USB 共享本机网络。
-# 开关：存在下列文件且内容非空 => 当作 HTTP(S) 代理地址（请求由 requests 读环境变量生效）。
-# 注意：本段只存在于 Android 项目的「同步副本」里，下次运行 tools/sync_python.py
-#       会被源头（projects/chaoxing-autowatch/app/app.py）覆盖，不会进交付包。
-def _caw_test_proxy():
-    for _p in ("/storage/emulated/0/Android/data/com.hpp.chaoxingwatch/files/caw_proxy.txt",
-               "/sdcard/Android/data/com.hpp.chaoxingwatch/files/caw_proxy.txt",
-               "/data/data/com.hpp.chaoxingwatch/files/caw_proxy.txt"):
-        try:
-            if os.path.exists(_p):
-                _u = open(_p, "r").read().strip()
-                if _u:
-                    os.environ["HTTP_PROXY"] = _u
-                    os.environ["HTTPS_PROXY"] = _u
-                    os.environ["http_proxy"] = _u
-                    os.environ["https_proxy"] = _u
-                    print("[test-proxy] ON via %s -> %s" % (_p, _u), flush=True)
-                else:
-                    print("[test-proxy] file empty: %s" % _p, flush=True)
-                return
-        except Exception as _e:
-            print("[test-proxy] skip %s: %s" % (_p, _e), flush=True)
-    print("[test-proxy] off (no config file)", flush=True)
-
-
-_caw_test_proxy()
-# ================== /TEST ONLY ==================

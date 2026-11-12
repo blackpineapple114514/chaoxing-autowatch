@@ -12,18 +12,15 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)                       # projects/chaoxing-autowatch
-# 工具链位置按需用环境变量覆盖；默认假设 JDK17 / Gradle 8.7 在 ANDROID_TOOLS 下。
-TOOLS = os.environ.get("ANDROID_TOOLS", os.path.expanduser("~/android"))
-JAVA_HOME = os.environ.get("JAVA_HOME", os.path.join(TOOLS, "jdk17"))
-GRADLE = os.environ.get("GRADLE_BIN",
-                      os.path.join(TOOLS, "gradle-8.7", "bin", "gradle.bat"))
+JAVA_HOME = r"C:\Users\hpp\android\jdk17"
+GRADLE = r"C:\Users\hpp\android\gradle-8.7\bin\gradle.bat"
 LOG = os.path.join(PROJ, "android", "build_android.log")
-NAME = "学习通自动刷视频v1.0.apk"
+NAME = "学习通自动刷视频v1.0.6.apk"
 
 VARIANT = (sys.argv[1] if len(sys.argv) > 1 else "release").lower()
 TASK = "assembleRelease" if VARIANT == "release" else "assembleDebug"
 # debug 包另起名字，免得自测时把交付用的 release 包覆盖掉。
-OUT_NAME = NAME if VARIANT == "release" else "学习通自动刷视频v1.0-debug.apk"
+OUT_NAME = NAME if VARIANT == "release" else "学习通自动刷视频v1.0.6-debug.apk"
 
 
 def run(args, env=None, label=""):
@@ -45,8 +42,10 @@ def main():
     env = dict(os.environ)
     env["JAVA_HOME"] = JAVA_HOME
     env["PATH"] = os.path.join(JAVA_HOME, "bin") + os.pathsep + \
-        os.path.dirname(GRADLE) + os.pathsep + env.get("PATH", "")
-    if run([GRADLE, TASK, "--console=plain"], env=env, label="gradle " + TASK):
+        r"C:\Users\hpp\android\gradle-8.7\bin" + os.pathsep + env.get("PATH", "")
+    # --no-daemon：本机 gradle daemon 起不来（java.net.BindException: Address already in use），
+    # 不是偶发，必须关掉 daemon 才能 assembleRelease。
+    if run([GRADLE, TASK, "--console=plain", "--no-daemon"], env=env, label="gradle " + TASK):
         raise SystemExit("构建失败，见 %s" % LOG)
 
     # 3) 拷产物

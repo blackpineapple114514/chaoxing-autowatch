@@ -143,6 +143,17 @@
         跳过已完成的任务点
         <span class="pill" id="doneInfo"></span>
       </label>
+      <label class="ch" style="margin-bottom:8px;font-size:14px">
+        <span>并行路数</span>
+        <select id="parallelSel" style="margin:0 8px;padding:4px 8px;border-radius:6px">
+          <option value="0" selected>自动（有几个视频开几路，最多 4 路）</option>
+          <option value="1">1 路（最稳）</option>
+          <option value="2">2 路</option>
+          <option value="3">3 路（约 2 倍速）</option>
+          <option value="4">4 路</option>
+        </select>
+        <span class="pill" id="parallelInfo">同时刷多个视频，各按真实时间推进</span>
+      </label>
       <div id="courses"></div>
     </div>
 
@@ -196,7 +207,25 @@ const Bridge = {
   },
 };
 
-function api(url, opt) { return fetch(url, opt).then(r => r.json()); }
+// fetch 打本机 Flask 偶尔会抛 "Failed to fetch"（Chromium/WebView2 的 ERR_NETWORK_ACCESS_DENIED），
+// 一次抖动不该把界面推到扫码页——统一在这里重试一次。
+async function api(url, opt) {
+  // 只重试“重复执行也无副作用”的请求：GET 和三个登录接口。
+  // （刷课/停止/退出这类 POST 绝不自动重发——响应丢了但服务端已经执行，重发会真的开两份任务。）
+  const safe = !opt || !opt.method || opt.method === 'GET' ||
+               /\/api\/login\/(auto|qr|refresh)$/.test(url);
+  let lastErr;
+  for (let i = 0; i < (safe ? 2 : 1); i++) {
+    try {
+      const r = await fetch(url, opt);
+      return await r.json();
+    } catch (e) {
+      lastErr = e;
+      if (i === 0) await new Promise(res => setTimeout(res, 400));
+    }
+  }
+  throw lastErr;
+}
 
 // ---------------- 登录
 // 学习通二维码只活 150 秒（官方页 3s×50 次就判失效），所以本地自己倒计时、到点主动换新码。
@@ -229,20 +258,32 @@ async function rotateQr(userAsked) {
       setQr(j.qr, j.ttl);
       $('#qrstat').textContent = userAsked ? '已刷新，请重新扫码' : '二维码已换新，请扫码';
     } else {
-      $('#qrstat').textContent = '刷新失败：' + (j.error || '未知错误');
+      // 没有会话（比如首屏取码就失败了）→ 直接重新要一张，而不是干瞪着“刷新失败”
+      $('#qrstat').textContent = '正在重新获取二维码…';
+      await newQR();
     }
   } catch (e) {
-    $('#qrstat').textContent = '刷新失败：' + e.message;
+    $('#qrstat').textContent = '刷新失败：' + (e.message || e) + '，正在重新获取…';
+    try { await newQR(); } catch (e2) {}
   } finally {
     qrRotating = false;
   }
 }
 
 async function newQR() {
-  const j = await api('/api/login/qr', { method: 'POST' });
-  if (!j.ok) { $('#qrstat').textContent = '二维码获取失败'; return; }
-  setQr(j.qr, j.ttl);
-  $('#qrstat').textContent = '等待扫码…';
+  try {
+    const j = await api('/api/login/qr', { method: 'POST' });
+    if (!j.ok) {
+      $('#qrstat').textContent = '二维码获取失败：' + (j.error || '未知原因') + '，正在重试…';
+      setTimeout(() => { if (!loggedIn) newQR().catch(() => {}); }, 2000);
+      return;
+    }
+    setQr(j.qr, j.ttl);
+    $('#qrstat').textContent = '等待扫码…';
+  } catch (e) {
+    $('#qrstat').textContent = '二维码取不到（' + (e.message || e) + '），2 秒后自动重试…';
+    setTimeout(() => { if (!loggedIn) newQR().catch(() => {}); }, 2000);
+  }
 }
 $('#refreshBtn').onclick = () => rotateQr(true);
 
@@ -432,6 +473,25 @@ function renderCourses() {
       if (!j.ok) { el.textContent = '加载失败: ' + (j.error || ''); return; }
       c.chapters = j.chapters;
       el.innerHTML = '';
+      // 课程级摘要：把「空课程 / 无视频 / 已全做完」三种情况说清楚，
+      // 否则一片空白或一片灰，人会以为程序卡住了。
+      const totalCh = j.chapters.length;
+      const vids = j.chapters.reduce((s, x) => s + (typeof x.videos === 'number' ? x.videos : 0), 0);
+      const doneV = j.chapters.reduce((s, x) => s + (x.videos_done || 0), 0);
+      let tip;
+      if (!totalCh) {
+        tip = '⚠ 该课程暂无章节内容（服务端返回 0 个任务点）—— 不是加载失败，通常是尚未开课 / 未加入 / 老师还没发布';
+      } else if (!vids) {
+        tip = '该课程没有视频任务点（只有作业 / 测验 / 文档），刷视频功能管不到它';
+      } else if (doneV >= vids) {
+        tip = '✅ 该课程视频已全部完成（' + doneV + ' / ' + vids + '），无需再刷';
+      } else {
+        tip = '共 ' + vids + ' 个视频 · 已完成 ' + doneV + ' · 待刷 ' + (vids - doneV);
+      }
+      const tipEl = document.createElement('div');
+      tipEl.className = 'chapters-meta';
+      tipEl.textContent = tip;
+      el.appendChild(tipEl);
       const allOn = $('#selAll').checked;
       j.chapters.forEach((ch, k) => {
         const nv = ch.videos;                                  // null=识别失败, 0=无视频, N=视频数
@@ -500,18 +560,31 @@ function exitProgress() {
 }
 
 function selectedCourses() {
+  // 规则：**任何一处打了勾都必须生效**，绝不静默丢弃。
+  //   ① 勾了章节  → 只刷这些章节（课程框勾不勾都一样有效）
+  //   ② 没勾章节但课程框勾着 → 整门课
+  //   ③ 都没勾 → 跳过这门课
+  // 旧实现只认「课程框 + 至少一个章节框」，勾了课程却没勾章节（或反过来）
+  // 都会被丢掉，界面就报「没有选中任何课程/章节」—— 已修。
   const picked = [];
-  document.querySelectorAll('#courses > .course > input[type=checkbox]').forEach(box => {
-    if (!box.checked) return;
-    const i = +box.dataset.i, c = courses[i];
+  document.querySelectorAll('#courses > .course').forEach(node => {
+    const box = node.querySelector('input[type=checkbox]');
+    const i = +(box && box.dataset.i);
+    const c = courses[i];
+    if (!c) return;
     const chEl = document.getElementById('ch-' + i);
-    let chapters = null;
-    if (chEl && c.chapters) {
-      const idx = [...chEl.querySelectorAll('.chk')].filter(x => x.checked).map(x => +x.dataset.k);
-      chapters = idx.map(k => c.chapters[k]);
-      if (chapters.length === 0) return;
+    const boxes = chEl ? [...chEl.querySelectorAll('.chk')] : [];
+    const on = boxes.filter(x => x.checked && !x.disabled);
+    if (on.length) {
+      const chapters = on.map(x => (c.chapters || [])[+x.dataset.k]).filter(Boolean);
+      if (chapters.length) {
+        picked.push({ courseid: c.courseid, clazzid: c.clazzid, cpi: c.cpi, name: c.name, chapters });
+        return;
+      }
     }
-    picked.push({ courseid: c.courseid, clazzid: c.clazzid, cpi: c.cpi, name: c.name, chapters });
+    if (box && box.checked) {
+      picked.push({ courseid: c.courseid, clazzid: c.clazzid, cpi: c.cpi, name: c.name, chapters: null });
+    }
   });
   return picked;
 }
@@ -547,7 +620,8 @@ async function startBrush(mode) {
   setStep(3, 'on'); setBar(3);
   setStage('正在启动…');
   const j = await api('/api/brush', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tasks, skip_done: $('#skipDone').checked }) });
+    body: JSON.stringify({ tasks, skip_done: $('#skipDone').checked,
+                           parallel: Number($('#parallelSel').value || 0) }) });
   if (!j.ok) { setStage('启动失败：' + (j.error || ''), 'err'); return; }
   $('#cancelBtn').disabled = false;
   enterProgress();
@@ -600,6 +674,9 @@ async function refreshJob() {
     setStep(3, 'done'); setStep(4, 'on');
     if (ph === 'retrying') {
       setStage(`重刷失败清单：第 ${job.retry_index || 0}/${job.retry_total || 0} 个视频…`);
+    } else if (job.parallel > 1) {
+      setStage(`刷课中：${job.videos_done || 0}/${job.videos_total || 0} 个已完成 · 并行 ${job.parallel} 路`
+               + (job.failed ? `（失败 ${job.failed}）` : '') + '…');
     } else {
       setStage(`刷课中：第 ${job.videos_index || 0}/${job.videos_total || 0} 个视频`
                + (job.cur_dur ? `（${fmt(job.cur_pos)} / ${fmt(job.cur_dur)}）` : '') + '…');
@@ -633,6 +710,16 @@ async function refreshJob() {
   if (job.quiz_total) meta.push('弹题：答对 ' + (job.quiz_done || 0) + ' / ' + job.quiz_total);
   if (job.failed) meta.push('失败待重刷：' + job.failed + ' 个');
   if (job.last) meta.push('最新：' + job.last);
+
+  // 并行：每一路一个槽位，能看出谁在跑、跑到哪
+  if (job.parallel > 1 && Array.isArray(job.workers) && job.workers.length) {
+    const ws = job.workers.map(w => {
+      const who = w.video ? (w.video.length > 22 ? w.video.slice(0, 22) + '…' : w.video) : (w.msg || '空闲');
+      const at = w.dur ? '(' + fmt(w.pos) + '/' + fmt(w.dur) + ')' : '';
+      return '  #' + w.id + ' ' + (w.state === 'running' ? '▶' : '·') + ' ' + who + at;
+    });
+    meta.push('并行 ' + job.parallel + ' 路：\n' + ws.join('\n'));
+  }
   $('#jobmeta').textContent = meta.join('\n');
 
   const lines = [];
@@ -717,19 +804,47 @@ $('#logoutBtn').onclick = async () => {
 
 // ---------------- 启动
 (async function init() {
-  const me = await api('/api/me');
-  if (me.ok && me.logged_in) { await onLoggedIn(); return; }
+  try {
+    const me = await api('/api/me');
+    if (me && me.ok && me.logged_in) { await onLoggedIn(); return; }
+  } catch (e) { /* 后端刚起还没就绪，继续往下试自动登录 */ }
+
   // 先试上次保存的登录（DPAPI 加密），失败再扫码
   $('#qrstat').textContent = '正在尝试自动登录…';
-  try {
-    const a = await api('/api/login/auto', { method: 'POST' });
-    if (a.ok) {
-      loggedIn = true;
-      $('#qrstat').textContent = '已自动登录 ✅';
+  let a = null;
+  for (let i = 0; i < 2; i++) {
+    try { a = await api('/api/login/auto', { method: 'POST' }); }
+    catch (e) { a = { ok: false, reason: 'network', error: e.message }; }
+    if (a && a.ok) break;
+    if (a && a.reason && a.reason !== 'network') break;   // 没凭据/已失效，重试没意义
+    if (i === 0) { $('#qrstat').textContent = '自动登录没连上，正在重试…'; await new Promise(r => setTimeout(r, 1200)); }
+  }
+
+  if (a && a.ok) {
+    loggedIn = true;
+    $('#qrstat').textContent = '已自动登录 ✅';
+    try {
       await onLoggedIn();
+    } catch (e) {
+      // 登录本身成功，只是界面刷新出错：绝不能把用户拨回扫码页
+      $('#loginCard').classList.add('hide');
+      $('#main').classList.remove('hide');
+      setStep(1, 'done'); setStep(2, 'on');
+      setStage('登录成功，但界面初始化出错：' + (e.message || e) + '（点「读取我的课程」可重试）');
       return;
     }
-  } catch (e) { /* 忽略，走扫码 */ }
+    return;
+  }
+
+  if (a && a.reason === 'network') {
+    $('#qrstat').textContent = '自动登录时网络没通（' + (a.error || '连不上学习通') + '），已保留登录信息，请重开应用再试';
+  } else if (a && a.reason === 'no_creds') {
+    $('#qrstat').textContent = '没有可复用的登录，请扫码';
+  } else if (a && a.reason === 'expired') {
+    $('#qrstat').textContent = '上次的登录已失效，请重新扫码';
+  } else {
+    $('#qrstat').textContent = '等待扫码…';
+  }
   await newQR();
   startPoll();
 })();

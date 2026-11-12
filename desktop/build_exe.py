@@ -28,6 +28,18 @@ args = [
     "--hidden-import", "bottle",
 ]
 
+# 本机 pip 环境里装了 torch/scipy/pandas 等巨型包，PyInstaller 会顺着把它们整包收进来
+# （实测 pkg 涨到 2.7 GB 且构建失败）。应用本身完全不用它们，这里显式排除。
+EXCLUDES = [
+    "torch", "torchvision", "torchaudio", "scipy", "pandas", "matplotlib",
+    "sympy", "numpy", "PIL", "cv2", "onnxruntime", "sklearn", "numba", "llvmlite",
+    "av", "imageio", "imageio_ffmpeg", "open3d", "frida", "ddddocr", "ctranslate2",
+    "tensorflow", "IPython", "notebook", "pytest", "PyQt5", "PySide2", "PySide6",
+]
+for _m in EXCLUDES:
+    args += ["--exclude-module", _m]
+
+
 print("building ...")
 pk.run(args)
 

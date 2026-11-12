@@ -574,9 +574,15 @@ def _brush_worker(sid, tasks, opts):
                     st["quiz_done"] = st.get("quiz_done", 0) + 1
                 return q["_done"]
 
+            # 服务端按【真实流逝时间】校验进度：必须先等够 delay 再涨 step。
+            # 原实现是「先 +step 再 sleep」，第一条就领先 30 秒，之后每一条都踩着这个
+            # 超前量被静默丢弃（仍回 200），整轮刷完一个都不进 —— 实测确认。
+            if delay < step:
+                delay = step
             while t_cur < duration:
                 if st["cancel"]:
                     raise KeyboardInterrupt
+                _sleep_cancelable(st, delay)
                 t_cur = min(duration, t_cur + step)
                 for q in quizzes:
                     if not q["_done"] and t_cur >= float(q.get("startTime") or 0):
@@ -610,7 +616,6 @@ def _brush_worker(sid, tasks, opts):
                         st["percent"] = int(((idx - 1 + frac) / float(total)) * 100)
                 st["last"] = "%s%s  %s / %s" % ("[重刷]" if attempt_round > 1 else "",
                                                 name, _mmss(t_cur), _mmss(duration))
-                _sleep_cancelable(st, delay)
 
             # 收尾：回读服务端是否真的判定“已完成”
             try:
@@ -620,6 +625,14 @@ def _brush_worker(sid, tasks, opts):
                         att["isPassed"] = a2.get("isPassed")
                         if a2.get("isPassed"):
                             st["passed"] = st.get("passed", 0) + 1
+                        else:
+                            # 验收：服务端进度必须真的涨过。没涨 = 上报被静默丢弃
+                            # （节拍快于真实时间 / 会话失效），不能当成功。
+                            _pt = int(a2.get("playTime") or a2.get("headOffset") or 0)
+                            if _pt <= start_ms:
+                                st["errors"].append(
+                                    "服务端未记录进度 %s（进度 %ss 未增长，多为节拍过快或会话失效）"
+                                    % (name, _pt // 1000))
             except Exception:
                 pass
             return True

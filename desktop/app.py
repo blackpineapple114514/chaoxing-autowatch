@@ -577,12 +577,14 @@ def _brush_worker(sid, tasks, opts):
             # 服务端按【真实流逝时间】校验进度：必须先等够 delay 再涨 step。
             # 原实现是「先 +step 再 sleep」，第一条就领先 30 秒，之后每一条都踩着这个
             # 超前量被静默丢弃（仍回 200），整轮刷完一个都不进 —— 实测确认。
-            if delay < step:
-                delay = step
+            # 注意：这里**不能**给 delay 赋值 —— 那会让 delay 变成这个嵌套函数的
+            # 局部变量，后面读它就 UnboundLocalError（上一版就是这么把每个视频
+            # 都判成失败、界面显示「全部完成：0 个视频」的）。只准用别名。
+            wait_s = delay if delay >= step else float(step)
             while t_cur < duration:
                 if st["cancel"]:
                     raise KeyboardInterrupt
-                _sleep_cancelable(st, delay)
+                _sleep_cancelable(st, wait_s)
                 t_cur = min(duration, t_cur + step)
                 for q in quizzes:
                     if not q["_done"] and t_cur >= float(q.get("startTime") or 0):

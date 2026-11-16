@@ -414,10 +414,17 @@ def api_chapters():
     def _count_videos(ch):
         try:
             jobs = u["cx"].get_jobs(courseid, clazzid, cpi, ch["knowledgeid"])
-            vids = [a for a in jobs.get("attachments", []) if a.get("type") == "video"]
+            atts = jobs.get("attachments", [])
+            vids = [a for a in atts if a.get("type") == "video"]
+            kinds = {}
+            for a in atts:
+                k = a.get("type") or "unknown"
+                kinds[k] = kinds.get(k, 0) + 1
             return {"videos": len(vids),
                     "videos_done": sum(1 for a in vids if a.get("isPassed")),
-                    "videos_sec": sum(int(a.get("ends") or 0) for a in vids)}
+                    "videos_sec": sum(int(a.get("ends") or 0) for a in vids),
+                    "jobs": len(atts), "jobtypes": kinds,
+                    "jobreason": jobs.get("reason") or "ok"}
         except Exception:
             return None
 
@@ -435,7 +442,45 @@ def api_chapters():
         for ch in chs:
             ch.setdefault("videos", None)
             ch.setdefault("videos_done", None)
-    return jsonify({"ok": True, "chapters": chs})
+
+    # ---- v1.0.11：课程级「为什么没有视频」判定 ----------------------------
+    # 以前 0 章节 / 0 视频一律写「暂无内容」，四种完全不同的情况混在一起：
+    #   服务端真没发布 / 章节里只有非视频任务点 / 已经全刷完 / 页面结构不认识 / 没签承诺书
+    # 这里给出一个明确的 reason，前端照着说人话。
+    vids_n = sum(ch["videos"] for ch in chs if isinstance(ch.get("videos"), int))
+    done_n = sum(ch.get("videos_done") or 0 for ch in chs if isinstance(ch.get("videos"), int))
+    jobs_n = sum(ch.get("jobs") or 0 for ch in chs)
+    jreasons = {str(ch.get("jobreason") or "") for ch in chs}
+    unknown = any(ch.get("videos") is None for ch in chs)
+    if not chs:
+        st = {}
+        try:
+            st = u["cx"].get_study_state(courseid, clazzid, cpi)
+        except Exception:
+            st = {}
+        if st.get("need_pledge"):
+            reason = "need_pledge"
+        elif st.get("no_content"):
+            reason = "no_chapters"
+        elif st.get("ok"):
+            reason = "no_chapters_unpublished"
+        else:
+            reason = "probe_failed"
+    elif vids_n == 0:
+        if jobs_n > 0:
+            reason = "no_video"          # 确实有任务点，只是没有 video 类型
+        elif jreasons & {"skeleton", "no_content"}:
+            reason = "empty_chapters"    # 章节页是空骨架
+        elif unknown:
+            reason = "parse_unknown"
+        else:
+            reason = "no_video"
+    elif done_n >= vids_n:
+        reason = "all_done"
+    else:
+        reason = "ok"
+    return jsonify({"ok": True, "chapters": chs, "reason": reason,
+                    "videos": vids_n, "videos_done": done_n, "jobs": jobs_n})
 
 
 # ---------------------------------------------------------------- 刷课

@@ -12,8 +12,8 @@
 
 | 平台 | 文件 | 说明 |
 |---|---|---|
-| **Windows** | `ChaoxingAutoWatch-v1.0.6-windows-x64.exe` | 双击即用，自带 Python 运行时，不用装任何东西 |
-| **Android** | `ChaoxingAutoWatch-v1.0.6-android.apk` | 装到手机上，后台静音刷，可息屏 |
+| **Windows** | `XueXiTongAutoWatch-v1.0.11.exe` | 双击即用，自带 Python 运行时，不用装任何东西 |
+| **Android** | `XueXiTongAutoWatch-v1.0.11-android.apk` | 装到手机上，后台静音刷，可息屏 |
 
 > 两个产物是同一套逻辑，界面、上报行为完全一致。
 

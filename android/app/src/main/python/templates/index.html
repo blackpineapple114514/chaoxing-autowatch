@@ -529,20 +529,52 @@ async function expandCourse(i) {
       const totalCh = j.chapters.length;
       const vids = j.chapters.reduce((s, x) => s + (typeof x.videos === 'number' ? x.videos : 0), 0);
       const doneV = j.chapters.reduce((s, x) => s + (x.videos_done || 0), 0);
-      let tip;
-      if (!totalCh) {
-        tip = '⚠ 该课程暂无章节内容（服务端返回 0 个任务点）—— 不是加载失败，通常是尚未开课 / 未加入 / 老师还没发布';
-      } else if (!vids) {
-        tip = '该课程没有视频任务点（只有作业 / 测验 / 文档），刷视频功能管不到它';
-      } else if (doneV >= vids) {
-        tip = '✅ 该课程视频已全部完成（' + doneV + ' / ' + vids + '），无需再刷';
-      } else {
-        tip = '共 ' + vids + ' 个视频 · 已完成 ' + doneV + ' · 待刷 ' + (vids - doneV);
+      // v1.0.11：后端给出 reason，按具体原因说人话，不再一律「暂无内容」
+      const R = {
+        no_chapters: '⚠ 服务端说这门课「暂无章节内容」—— 通常是老师还没发布 / 班级还没开课，不是程序读不到',
+        no_chapters_unpublished: '⚠ 服务端返回 0 个章节，但页面没有「暂无内容」提示 —— 可能是加入方式或权限问题，建议在网页版点开确认',
+        need_pledge: '⚠ 这门课要先签《在线学习诚信承诺书》：到网页版或 App 的课程页勾选「我已完整知晓并自愿遵守上述内容」→「开始学习」，再回来点「刷新进度」',
+        probe_failed: '⚠ 这门课的页面没读到（网络问题），稍后点「刷新进度」再试',
+        empty_chapters: '该课程的章节页是空的（服务端没有任何任务点），刷视频功能管不到它',
+        no_video: '该课程没有视频任务点（只有文档 / 作业 / 测验 / 直播），刷视频功能管不到它',
+        parse_unknown: '⚠ 有一章的页面结构程序没见过，可能读漏了 —— 点「复制诊断」把信息发我',
+        all_done: '✅ 该课程视频已全部完成（' + doneV + ' / ' + vids + '），无需再刷',
+        ok: ''
+      };
+      let tip = R[j.reason];
+      if (!tip) {
+        if (!totalCh) {
+          tip = '⚠ 该课程暂无章节内容（服务端返回 0 个任务点）—— 不是加载失败，通常是尚未开课 / 未加入 / 老师还没发布';
+        } else if (!vids) {
+          tip = '该课程没有视频任务点（只有作业 / 测验 / 文档），刷视频功能管不到它';
+        } else if (doneV >= vids) {
+          tip = '✅ 该课程视频已全部完成（' + doneV + ' / ' + vids + '），无需再刷';
+        } else {
+          tip = '共 ' + vids + ' 个视频 · 已完成 ' + doneV + ' · 待刷 ' + (vids - doneV);
+        }
       }
       const tipEl = document.createElement('div');
       tipEl.className = 'chapters-meta';
       tipEl.textContent = tip;
+      // 诊断：把这门课每章的「章节名 / 任务点数 / 类型 / 解析结果」复制出来，方便反馈
+      const diagBtn = document.createElement('button');
+      diagBtn.className = 'ghost';
+      diagBtn.style.cssText = 'margin-left:8px;padding:2px 8px;font-size:11px';
+      diagBtn.textContent = '复制诊断';
+      diagBtn.onclick = () => {
+        const lines = j.chapters.map((x, k) => (k + 1) + '. ' + x.name +
+          ' | 任务点 ' + (x.jobs === undefined ? '?' : x.jobs) +
+          ' | 视频 ' + (x.videos === null ? '识别失败' : x.videos) +
+          ' | 类型 ' + JSON.stringify(x.jobtypes || {}) +
+          ' | ' + (x.jobreason || ''));
+        const txt = '课程：' + c.name + '\nid=' + c.courseid + ' clazzid=' + c.clazzid +
+          ' cpi=' + c.cpi + '\n判定：' + (j.reason || '?') + '\n' + lines.join('\n');
+        (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject())
+          .then(() => { diagBtn.textContent = '已复制'; })
+          .catch(() => { prompt('复制下面这段：', txt); });
+      };
       el.appendChild(tipEl);
+      el.appendChild(diagBtn);
       // 课程级：全部视频已完成 → 打绿勾 + 禁用课程勾选框（明确表示"不用选"）
       const coNode = document.getElementById('co-' + i);
       if (coNode) {

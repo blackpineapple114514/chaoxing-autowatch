@@ -9,6 +9,7 @@ import time
 import json
 import base64
 import hashlib
+import html as _html
 import threading
 from urllib.parse import urlparse
 
@@ -197,7 +198,9 @@ class Chaoxing:
         names = re.findall(r'<span class="course-name overHidden2"[^>]*>\s*([^<]+)', r.text)
         for i, n in enumerate(names):
             if i < len(out):
-                out[i]["name"] = n.strip()
+                # 课程名里常带 &nbsp;（如 "Computer&nbsp;Programming&nbsp;I"），
+                # 不解码会原样显示成一串实体。
+                out[i]["name"] = _html.unescape(n).replace("\xa0", " ").strip()
         return out
 
     def get_chapters(self, courseid, clazzid, cpi):
@@ -206,19 +209,23 @@ class Chaoxing:
         r = self.s.get(url, timeout=25,
                        headers={"Referer": "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/interaction"})
         out = []
-        pat = re.compile(r'<div class="chapter_item" id="cur(\d+)"(.*?)</div>\s*</div>\s*</div>', re.S)
-        for m in pat.finditer(r.text):
-            kid, body = m.group(1), m.group(2)
+        html = r.text
+        # 按 <div ... id="cur<kid>"> 的【出现位置】切分，不再靠 "</div></div></div>" 数层数。
+        # 旧写法要求节点正文后面紧跟三个闭合 div；深层小节（如 2.3.1.1，第 4 层）嵌套层数不同，
+        # 匹配会在别处截断 → 整条节点丢失（表症：某些小节在列表里根本不出现）。
+        marks = list(re.finditer(r'<div[^>]*\bid="cur(\d+)"', html))
+        for i, m in enumerate(marks):
+            kid = m.group(1)
+            body = html[m.end(): marks[i + 1].start() if i + 1 < len(marks) else len(html)]
             nm = re.search(r'class="catalog_name[^"]*"[^>]*>(.*?)</a>', body, re.S)
             name = re.sub(r'<[^>]+>', '', nm.group(1)).strip() if nm else ''
-            cnt = None
+            cnt = 0
             for tag in re.findall(r'<input[^>]*knowledgeJobCount[^>]*>', body):
                 m2 = re.search(r'value="(\d+)"', tag)
                 if m2:
-                    cnt = m2
+                    cnt = int(m2.group(1))
                     break
-            out.append({"knowledgeid": kid, "name": name,
-                        "jobcount": int(cnt.group(1)) if cnt else 0})
+            out.append({"knowledgeid": kid, "name": name, "jobcount": cnt})
         return out
 
     def get_jobs(self, courseid, clazzid, cpi, knowledgeid):
@@ -228,11 +235,55 @@ class Chaoxing:
         r = self.s.get(url, timeout=25, headers={
             "Referer": "https://mooc1.chaoxing.com/mycourse/studentstudy?chapterId=%s&courseId=%s&clazzid=%s&cpi=%s"
                        % (knowledgeid, courseid, clazzid, cpi)})
-        m = re.search(r'mArg = (\{.*?\});', r.text, re.S)
+        # 老版章节页把任务点 JSON 内联成 `mArg = ({...});`。
+        # 2026 新版章节页换成了 `mArg = $mArg;`，而 $mArg 根本没定义（服务端只回空骨架），
+        # 页面正文同时写「暂无内容」。两者要分开报，前端才能说清是「没内容」还是「解析不认识」。
+        m = re.search(r'mArg\s*=\s*(\{.*?\})\s*;', r.text, re.S)
         if not m:
-            return {"defaults": {}, "attachments": []}
-        d = json.loads(m.group(1))
-        return {"defaults": d.get("defaults", {}), "attachments": d.get("attachments", [])}
+            if "$mArg" in r.text:
+                return {"defaults": {}, "attachments": [], "reason": "skeleton"}
+            if "暂无内容" in r.text or "暂无任务点" in r.text:
+                return {"defaults": {}, "attachments": [], "reason": "no_content"}
+            return {"defaults": {}, "attachments": [], "reason": "unknown"}
+        try:
+            d = json.loads(m.group(1))
+        except Exception:
+            return {"defaults": {}, "attachments": [], "reason": "bad_json"}
+        return {"defaults": d.get("defaults", {}), "attachments": d.get("attachments", []),
+                "reason": "ok"}
+
+    def get_study_state(self, courseid, clazzid, cpi):
+        """看这门课学习页的状态（只读，一个请求）：
+        - need_pledge: 还没勾《在线学习诚信承诺书》，章节内容拿不到
+        - no_content:  服务端页面自己写着「暂无章节内容」
+        用来在「0 章节 / 0 视频」时给出确切原因，而不是笼统说一句暂无。
+        """
+        # ① 章节页自己有没有写「暂无章节内容」（这是最直接的证据）
+        no_content = False
+        try:
+            sc = ("https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse"
+                  "?courseid=%s&clazzid=%s&cpi=%s&ut=s&t=%d"
+                  % (courseid, clazzid, cpi, int(time.time() * 1000)))
+            t0 = self.s.get(sc, timeout=25).text
+            if "暂无章节内容" in t0:
+                no_content = True
+        except Exception:
+            pass
+        # ② 学习页上的承诺书状态
+        url = ("https://mooc1.chaoxing.com/visit/stucoursemiddle"
+               "?courseid=%s&clazzid=%s&cpi=%s&ismooc2=1&v=2" % (courseid, clazzid, cpi))
+        try:
+            t = self.s.get(url, timeout=25).text
+        except Exception:
+            return {"ok": bool(no_content), "need_pledge": False, "no_content": no_content}
+        need = False
+        m = (re.search(r'id="notAgreeCommitment"[^>]*value="([^"]*)"', t)
+             or re.search(r'value="([^"]*)"[^>]*id="notAgreeCommitment"', t))
+        if m and str(m.group(1)).strip().lower() == "true":
+            need = True
+        if "暂无章节内容" in t:
+            no_content = True
+        return {"ok": True, "need_pledge": need, "no_content": no_content}
 
     # ---------------------------------------------------- 视频上报
     def get_video_status(self, objectid):

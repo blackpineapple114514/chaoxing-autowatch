@@ -17,12 +17,12 @@ VSVersionInfo(
           '080404b0',
           [StringStruct('CompanyName', 'hpp'),
            StringStruct('FileDescription', '学习通自动刷视频'),
-           StringStruct('FileVersion', '1.0.10.0'),
+           StringStruct('FileVersion', '1.0.11.0'),
            StringStruct('InternalName', 'ChaoxingAutoWatch'),
            StringStruct('LegalCopyright', 'Copyright (C) 2026 hpp'),
-           StringStruct('OriginalFilename', '学习通自动刷视频v1.0.10.exe'),
+           StringStruct('OriginalFilename', '学习通自动刷视频v1.0.11.exe'),
            StringStruct('ProductName', '学习通自动刷视频'),
-           StringStruct('ProductVersion', '1.0.10'),
+           StringStruct('ProductVersion', '1.0.11'),
            StringStruct('Comments', 'by hpp')])
       ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])
